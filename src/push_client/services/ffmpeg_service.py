@@ -34,6 +34,7 @@ import re
 
 from PySide6.QtCore import QThread, Signal
 
+from .ffmpeg_path import get_ffmpeg, get_ffplay
 from .window_capture import WindowCaptureFeeder, get_window_rect
 
 
@@ -179,7 +180,7 @@ class FFmpegWorker(QThread):
         try:
             self._preview_process = subprocess.Popen(
                 [
-                    "ffplay",
+                    get_ffplay(),
                     "-rtsp_transport", "tcp",
                     "-i", self._preview_url,
                     "-window_title", "推流预览",
@@ -314,7 +315,7 @@ def build_ffmpeg_command(
         屏幕捕获统一使用 ``"offset:x,y,w,h"`` 格式（包括主屏幕），
         确保只捕获选定的单个屏幕，而不是整个虚拟桌面。
     """
-    cmd = ["ffmpeg", "-y"]
+    cmd = [get_ffmpeg(), "-y"]
 
     # ---- 输入部分 ----
     if source_type == "video":

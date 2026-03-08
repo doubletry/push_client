@@ -28,6 +28,7 @@ from ..models.config import (
 from ..services.device_service import (
     list_cameras, list_screens, list_windows,
 )
+from ..services.ffmpeg_path import get_ffmpeg
 from ..views.main_window import MainWindow
 from ..views.stream_card import StreamCardView
 from .stream_controller import StreamController
@@ -145,7 +146,7 @@ class AppController(QObject):
         try:
             result = subprocess.run(
                 [
-                    "ffmpeg", "-y",
+                    get_ffmpeg(), "-y",
                     "-f", "lavfi", "-i",
                     "testsrc=duration=1:size=320x240:rate=1",
                     "-c:v", "libx264", "-preset", "ultrafast",

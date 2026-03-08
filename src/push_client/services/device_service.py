@@ -22,6 +22,8 @@ import subprocess
 import json
 from dataclasses import dataclass
 
+from .ffmpeg_path import get_ffprobe
+
 
 @dataclass
 class CameraInfo:
@@ -210,7 +212,7 @@ def probe_video_info(file_path: str) -> dict:
     try:
         result = subprocess.run(
             [
-                "ffprobe", "-v", "quiet",
+                get_ffprobe(), "-v", "quiet",
                 "-print_format", "json",
                 "-show_streams",
                 file_path,
@@ -247,7 +249,7 @@ def check_rtsp_reachable(url: str, timeout: int = 5) -> tuple[bool, str]:
     """
     try:
         result = subprocess.run(
-            ["ffprobe", "-v", "error", "-rtsp_transport", "tcp", "-i", url],
+            [get_ffprobe(), "-v", "error", "-rtsp_transport", "tcp", "-i", url],
             capture_output=True, text=True, timeout=timeout,
             creationflags=subprocess.CREATE_NO_WINDOW,
         )
