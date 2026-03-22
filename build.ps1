@@ -31,6 +31,7 @@ $IconPath      = Join-Path $ProjectRoot "assets\beaver_logo.ico"
 # ── Nuitka 编译参数 ──
 $NuitkaArgs = @(
     "--standalone"
+    "--assume-yes-for-downloads"
     "--enable-plugin=pyside6"
     "--windows-console-mode=disable"
     "--windows-product-name=$ProductName"
