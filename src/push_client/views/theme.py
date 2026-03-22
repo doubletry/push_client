@@ -1,10 +1,10 @@
 """
-冷色工业风深色主题
-==================
+浅冷色系主题
+============
 
 提供全局统一的颜色常量和 QSS 样式表，供所有 QWidgets 组件引用。
-灵感来源于工业控制面板的冷色调设计，以深蓝灰为基底，
-搭配钢蓝色强调，营造沉稳、专业的轻工业视觉风格。
+以纯白为基底，搭配淡蓝灰色表面和冷钢蓝强调色，
+营造干净、清透的轻工业视觉风格。
 
 使用方式::
 
@@ -16,45 +16,45 @@ from __future__ import annotations
 
 
 class Theme:
-    """冷色工业风主题色板与全局样式表。
+    """浅冷色系主题色板与全局样式表。
 
     所有颜色均为 ``#RRGGBB`` 格式的字符串常量，
     可直接在 QSS 或 QPalette 中使用。
     """
 
-    # ── 基础色（深蓝灰色调）──
-    BASE   = "#1a1d23"  # 主背景：深炭灰
-    MANTLE = "#15181e"  # 次级背景：更深
-    CRUST  = "#10131a"  # 最深背景
+    # ── 基础色（白色基底）──
+    BASE   = "#ffffff"  # 主背景：纯白
+    MANTLE = "#f5f7fa"  # 次级背景：冰蓝白
+    CRUST  = "#edf0f5"  # 最深背景：浅灰蓝
 
     # ── 表面色（输入框、边框、分隔线）──
-    SURFACE0 = "#252a33"
-    SURFACE1 = "#333a47"
-    SURFACE2 = "#434d5e"
+    SURFACE0 = "#e8ecf1"
+    SURFACE1 = "#d5dbe4"
+    SURFACE2 = "#c2cada"
 
     # ── 覆盖色（禁用文本、占位符）──
-    OVERLAY0 = "#5a6577"
-    OVERLAY1 = "#6e7b8f"
-    OVERLAY2 = "#8392a7"
+    OVERLAY0 = "#9ca8b8"
+    OVERLAY1 = "#8a97a8"
+    OVERLAY2 = "#788698"
 
     # ── 副文本色 ──
-    SUBTEXT0 = "#97a5b8"
-    SUBTEXT1 = "#afbccd"
+    SUBTEXT0 = "#677585"
+    SUBTEXT1 = "#566474"
 
     # ── 主文本色 ──
-    TEXT = "#c8d2e0"
+    TEXT = "#2c3e50"
 
-    # ── 强调色（冷色工业色板）──
-    STEEL    = "#6b8aad"   # 钢蓝
-    SLATE    = "#7b8fa8"   # 石板蓝
-    CYAN     = "#5ba4b5"   # 工业青
-    TEAL     = "#4d9e8e"   # 冷水绿
-    GREEN    = "#5fa87a"   # 指示灯绿
-    RED      = "#c45c5c"   # 警告红
-    AMBER    = "#c49a4a"   # 琥珀黄（工业警告）
-    ORANGE   = "#b87a48"   # 暗橙
-    BLUE     = "#5b8ec9"   # 钢蓝强
-    ICE      = "#82b3cc"   # 冰蓝
+    # ── 强调色（冷色系）──
+    STEEL    = "#5082b5"   # 钢蓝主色
+    SLATE    = "#6a8caa"   # 石板蓝
+    CYAN     = "#4a9bb0"   # 冷青
+    TEAL     = "#3d9484"   # 冷水绿
+    GREEN    = "#48a068"   # 指示灯绿
+    RED      = "#d05050"   # 警告红
+    AMBER    = "#c08a30"   # 琥珀黄
+    ORANGE   = "#b07040"   # 暗橙
+    BLUE     = "#4a7ec0"   # 钢蓝强
+    ICE      = "#6aafc8"   # 冰蓝
 
     # ── 语义色 ──
     ACCENT  = STEEL
@@ -78,8 +78,8 @@ class Theme:
     def global_stylesheet(cls) -> str:
         """生成应用级全局 QSS 样式表。
 
-        冷色工业风：低饱和度冷色调，直线棱角感，
-        按钮/输入框使用较小圆角，整体沉稳克制。
+        浅冷色系：白色底色、淡蓝灰表面、钢蓝强调，
+        清爽明亮的专业视觉风格。
 
         Returns:
             完整的 QSS 字符串，可通过 ``QApplication.setStyleSheet()`` 应用。
@@ -93,28 +93,28 @@ class Theme:
 
         /* ── 按钮 ── */
         QPushButton {{
-            background-color: {cls.SURFACE1};
+            background-color: {cls.MANTLE};
             color: {cls.TEXT};
-            border: 1px solid {cls.SURFACE2};
+            border: 1px solid {cls.SURFACE1};
             border-radius: {cls.RADIUS_NORMAL}px;
             padding: 5px 14px;
         }}
         QPushButton:hover {{
-            background-color: {cls.SURFACE2};
+            background-color: {cls.SURFACE0};
             border-color: {cls.STEEL};
         }}
         QPushButton:pressed {{
-            background-color: {cls.SURFACE0};
+            background-color: {cls.SURFACE1};
         }}
         QPushButton:disabled {{
-            background-color: {cls.SURFACE0};
+            background-color: {cls.MANTLE};
             color: {cls.OVERLAY0};
             border-color: {cls.SURFACE0};
         }}
 
         /* ── 输入框 ── */
         QLineEdit {{
-            background-color: {cls.SURFACE0};
+            background-color: {cls.BASE};
             color: {cls.TEXT};
             border: 1px solid {cls.SURFACE1};
             border-radius: {cls.RADIUS_NORMAL}px;
@@ -132,7 +132,7 @@ class Theme:
 
         /* ── 下拉框 ── */
         QComboBox {{
-            background-color: {cls.SURFACE0};
+            background-color: {cls.BASE};
             color: {cls.TEXT};
             border: 1px solid {cls.SURFACE1};
             border-radius: {cls.RADIUS_NORMAL}px;
@@ -146,11 +146,11 @@ class Theme:
             width: 20px;
         }}
         QComboBox QAbstractItemView {{
-            background-color: {cls.SURFACE0};
+            background-color: {cls.BASE};
             color: {cls.TEXT};
             border: 1px solid {cls.SURFACE1};
             border-radius: {cls.RADIUS_SMALL}px;
-            selection-background-color: {cls.SURFACE1};
+            selection-background-color: {cls.SURFACE0};
             selection-color: {cls.TEXT};
         }}
 
@@ -164,7 +164,7 @@ class Theme:
             height: 16px;
             border: 1px solid {cls.SURFACE2};
             border-radius: {cls.RADIUS_SMALL}px;
-            background-color: {cls.SURFACE0};
+            background-color: {cls.BASE};
         }}
         QCheckBox::indicator:checked {{
             background-color: {cls.STEEL};
@@ -202,7 +202,7 @@ class Theme:
 
         /* ── 工具提示 ── */
         QToolTip {{
-            background-color: {cls.SURFACE0};
+            background-color: {cls.MANTLE};
             color: {cls.TEXT};
             border: 1px solid {cls.SURFACE1};
             border-radius: {cls.RADIUS_SMALL}px;

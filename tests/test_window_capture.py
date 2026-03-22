@@ -77,19 +77,36 @@ class TestScreenCaptureStructures:
 class TestCursorDrawingResilience:
     """光标绘制相关测试"""
 
-    def test_draw_cursor_on_dc_called_in_capture(self):
-        """capture_screen_frame 使用 SRCCOPY 并手动绘制鼠标光标"""
+    def test_cursor_snapshot_used_in_capture(self):
+        """capture_screen_frame 通过 CopyIcon 快照绘制鼠标光标"""
+        from push_client.services.window_capture import capture_screen_frame
+        # _get_cursor_snapshot 返回 (hCursorCopy, draw_x, draw_y)
+        fake_snap = (12345, 5, 5)  # 模拟光标句柄和位置
+        with mock.patch(
+            "push_client.services.window_capture._extract_pixels",
+            return_value=b"\x00" * 100,
+        ), mock.patch(
+            "push_client.services.window_capture._get_cursor_snapshot",
+            return_value=fake_snap,
+        ) as mock_snap:
+            result = capture_screen_frame(0, 0, 10, 10)
+            assert result is not None
+            assert len(result) == 100
+            mock_snap.assert_called_once()
+
+    def test_capture_works_when_cursor_invisible(self):
+        """光标不可见时 capture_screen_frame 仍正常返回帧数据"""
         from push_client.services.window_capture import capture_screen_frame
         with mock.patch(
             "push_client.services.window_capture._extract_pixels",
             return_value=b"\x00" * 100,
         ), mock.patch(
-            "push_client.services.window_capture._draw_cursor_on_dc",
-        ) as mock_draw:
+            "push_client.services.window_capture._get_cursor_snapshot",
+            return_value=None,
+        ):
             result = capture_screen_frame(0, 0, 10, 10)
             assert result is not None
             assert len(result) == 100
-            mock_draw.assert_called_once()
 
     def test_feeder_continues_after_capture_error(self):
         """截图异常时 feeder 跳过当前帧但继续运行"""

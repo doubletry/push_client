@@ -387,49 +387,59 @@ class ICONINFO(ctypes.Structure):
     ]
 
 
-def _draw_cursor_on_dc(mem_dc, region_x: int, region_y: int,
-                        region_w: int, region_h: int):
-    """在内存 DC 上绘制系统光标，确保每帧一致渲染鼠标。"""
-    try:
-        user32 = ctypes.windll.user32
-        gdi32 = ctypes.windll.gdi32
+def _get_cursor_snapshot():
+    """获取当前光标的快照信息（位置、热点、图标副本）。
 
-        ci = CURSORINFO()
-        ci.cbSize = ctypes.sizeof(CURSORINFO)
+    通过 CopyIcon 复制光标句柄，确保在后续绘制时句柄不会被系统回收。
 
-        if not user32.GetCursorInfo(ctypes.byref(ci)):
-            return
-        if not (ci.flags & 0x00000001) or not ci.hCursor:  # CURSOR_SHOWING
-            return
+    Returns:
+        ``(hCursorCopy, draw_x, draw_y)`` 或 ``None``（光标不可见/获取失败）。
+        调用方使用完毕后必须调用 ``DestroyIcon(hCursorCopy)`` 释放资源。
+    """
+    user32 = ctypes.windll.user32
+    gdi32 = ctypes.windll.gdi32
 
-        cursor_x = ci.ptScreenPos.x - region_x
-        cursor_y = ci.ptScreenPos.y - region_y
+    ci = CURSORINFO()
+    ci.cbSize = ctypes.sizeof(CURSORINFO)
+    if not user32.GetCursorInfo(ctypes.byref(ci)):
+        return None
+    if not (ci.flags & 0x00000001) or not ci.hCursor:  # CURSOR_SHOWING
+        return None
 
-        # 获取光标热点偏移
-        icon_info = ICONINFO()
-        if user32.GetIconInfo(ci.hCursor, ctypes.byref(icon_info)):
-            cursor_x -= icon_info.xHotspot
-            cursor_y -= icon_info.yHotspot
-            if icon_info.hbmMask:
-                gdi32.DeleteObject(icon_info.hbmMask)
-            if icon_info.hbmColor:
-                gdi32.DeleteObject(icon_info.hbmColor)
+    # 复制光标句柄，使其不受系统光标切换影响
+    h_copy = user32.CopyIcon(ci.hCursor)
+    if not h_copy:
+        return None
 
-        # 只在捕获区域内绘制
-        if -32 <= cursor_x < region_w and -32 <= cursor_y < region_h:
-            user32.DrawIconEx(
-                mem_dc, cursor_x, cursor_y, ci.hCursor,
-                0, 0, 0, 0, DI_NORMAL,
-            )
-    except Exception:
-        pass
+    screen_x = ci.ptScreenPos.x
+    screen_y = ci.ptScreenPos.y
+    hotspot_x = 0
+    hotspot_y = 0
+
+    icon_info = ICONINFO()
+    if user32.GetIconInfo(h_copy, ctypes.byref(icon_info)):
+        hotspot_x = icon_info.xHotspot
+        hotspot_y = icon_info.yHotspot
+        if icon_info.hbmMask:
+            gdi32.DeleteObject(icon_info.hbmMask)
+        if icon_info.hbmColor:
+            gdi32.DeleteObject(icon_info.hbmColor)
+
+    return h_copy, screen_x - hotspot_x, screen_y - hotspot_y
 
 
 def capture_screen_frame(x: int, y: int, w: int, h: int) -> bytes | None:
     """使用 BitBlt 捕获屏幕区域并绘制鼠标光标。
 
-    通过 BitBlt 从屏幕 DC 截取指定区域，然后用 DrawIconEx
-    在每帧上一致地绘制鼠标光标，避免 gdigrab 的鼠标闪烁问题。
+    流程：
+        1. 调用 :func:`_get_cursor_snapshot` 获取光标快照（CopyIcon 副本）
+        2. BitBlt(SRCCOPY) 捕获屏幕内容（不含硬件光标，不闪烁）
+        3. DrawIconEx 将光标副本绘制到离屏 DC
+        4. DestroyIcon 释放光标副本
+
+    SRCCOPY 不含 CAPTUREBLT，避免系统在 BitBlt 期间隐藏硬件光标
+    导致显示器鼠标闪烁。CopyIcon 确保光标句柄在整个绘制过程中保持有效，
+    杜绝因句柄失效导致的推流画面鼠标闪烁。
 
     Args:
         x: 屏幕区域左上角 X 坐标
@@ -443,8 +453,13 @@ def capture_screen_frame(x: int, y: int, w: int, h: int) -> bytes | None:
     user32 = ctypes.windll.user32
     gdi32 = ctypes.windll.gdi32
 
+    # ① 在 BitBlt 之前获取光标快照，减少时序差异
+    cursor_snap = _get_cursor_snapshot()
+
     screen_dc = user32.GetDC(0)
     if not screen_dc:
+        if cursor_snap:
+            user32.DestroyIcon(cursor_snap[0])
         return None
 
     try:
@@ -452,11 +467,20 @@ def capture_screen_frame(x: int, y: int, w: int, h: int) -> bytes | None:
         bitmap = gdi32.CreateCompatibleBitmap(screen_dc, w, h)
         gdi32.SelectObject(mem_dc, bitmap)
 
+        # ② BitBlt(SRCCOPY)：捕获屏幕内容，不含硬件光标
         gdi32.BitBlt(mem_dc, 0, 0, w, h, screen_dc, x, y, SRCCOPY)
-        # 使用 SRCCOPY（不带 CAPTUREBLT）避免系统在 BitBlt 期间
-        # 隐藏硬件光标导致显示器鼠标闪烁。
-        # 手动绘制光标到离屏 DC，确保推流画面包含鼠标。
-        _draw_cursor_on_dc(mem_dc, x, y, w, h)
+
+        # ③ 用光标副本在离屏 DC 上绘制鼠标
+        if cursor_snap:
+            h_cursor, abs_x, abs_y = cursor_snap
+            draw_x = abs_x - x
+            draw_y = abs_y - y
+            if -64 <= draw_x < w and -64 <= draw_y < h:
+                user32.DrawIconEx(
+                    mem_dc, draw_x, draw_y, h_cursor,
+                    0, 0, 0, 0, DI_NORMAL,
+                )
+            user32.DestroyIcon(h_cursor)
 
         data = _extract_pixels(mem_dc, bitmap, w, h)
         gdi32.DeleteObject(bitmap)
