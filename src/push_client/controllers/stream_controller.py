@@ -311,25 +311,11 @@ class StreamController(QObject):
 
     def _on_worker_progress(self, info: dict):
         """FFmpeg 推流进度更新。"""
-        # 全屏画面模式不显示进度信息
-        if self._source_type == "screen":
-            return
-        parts = []
-        if "time" in info:
-            parts.append(f"时间:{info['time']}")
-        if "fps" in info:
-            parts.append(f"帧率:{info['fps']}")
-        if "bitrate" in info:
-            parts.append(f"码率:{info['bitrate']}")
-        if "speed" in info:
-            parts.append(f"速度:{info['speed']}")
-        if "frame" in info:
-            parts.append(f"帧:{info['frame']}")
-        self._card.set_progress("  ".join(parts))
+        # 不在界面上显示进度信息
+        pass
 
     def _on_worker_stopped(self):
         """FFmpeg 进程已结束。"""
-        self._card.set_progress("")
         self._set_state(StreamState.IDLE)
 
     # ==================================================================

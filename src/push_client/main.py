@@ -47,7 +47,8 @@ def main():
     font.setPointSize(Theme.FONT_SIZE_NORMAL)
     app.setFont(font)
 
-    # 使用系统默认主题，不设置自定义样式表
+    # ── 全局主题样式表（冷色工业风）──
+    app.setStyleSheet(Theme.global_stylesheet())
 
     # ── 窗口图标 ──
     icon = app.style().standardIcon(app.style().StandardPixmap.SP_MediaPlay)

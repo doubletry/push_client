@@ -144,7 +144,9 @@ class StreamCardView(QFrame):
         row = QHBoxLayout()
         row.setSpacing(8)
 
-        row.addWidget(QLabel("视频源:"))
+        lbl = QLabel("视频源:")
+        lbl.setFixedWidth(50)
+        row.addWidget(lbl)
 
         # 源类型下拉框
         self._source_type_combo = QComboBox()
@@ -189,7 +191,9 @@ class StreamCardView(QFrame):
         row = QHBoxLayout()
         row.setSpacing(8)
 
-        row.addWidget(QLabel("流名称:"))
+        lbl = QLabel("流名称:")
+        lbl.setFixedWidth(50)
+        row.addWidget(lbl)
         self._stream_name_input = QLineEdit()
         self._stream_name_input.setPlaceholderText("如 stream1")
         row.addWidget(self._stream_name_input, 1)
@@ -213,7 +217,9 @@ class StreamCardView(QFrame):
         row.setContentsMargins(0, 0, 0, 0)
         row.setSpacing(8)
 
-        row.addWidget(QLabel("编码:"))
+        lbl = QLabel("编码:")
+        lbl.setFixedWidth(50)
+        row.addWidget(lbl)
         self._codec_combo = QComboBox()
         self._codec_combo.setFixedWidth(110)
         self._codec_combo.addItems(CODEC_OPTIONS)
@@ -270,12 +276,7 @@ class StreamCardView(QFrame):
         self._status_label = QLabel("就绪")
         row.addWidget(self._status_label)
 
-        # 进度标签
-        self._progress_label = QLabel("")
-        small_font = QFont()
-        small_font.setPointSize(8)
-        self._progress_label.setFont(small_font)
-        row.addWidget(self._progress_label, 1)  # stretch 填满
+        row.addStretch()
 
         return row
 
@@ -523,10 +524,6 @@ class StreamCardView(QFrame):
             self._status_label.setStyleSheet(f"color: {color}; font-weight: bold;")
         else:
             self._status_label.setStyleSheet("")
-
-    def set_progress(self, text: str):
-        """更新进度信息标签。"""
-        self._progress_label.setText(text)
 
     def set_buttons_streaming(self, is_streaming: bool):
         """根据推流状态切换按钮启用/禁用。

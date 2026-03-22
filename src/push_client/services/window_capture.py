@@ -390,36 +390,39 @@ class ICONINFO(ctypes.Structure):
 def _draw_cursor_on_dc(mem_dc, region_x: int, region_y: int,
                         region_w: int, region_h: int):
     """在内存 DC 上绘制系统光标，确保每帧一致渲染鼠标。"""
-    user32 = ctypes.windll.user32
-    gdi32 = ctypes.windll.gdi32
+    try:
+        user32 = ctypes.windll.user32
+        gdi32 = ctypes.windll.gdi32
 
-    ci = CURSORINFO()
-    ci.cbSize = ctypes.sizeof(CURSORINFO)
+        ci = CURSORINFO()
+        ci.cbSize = ctypes.sizeof(CURSORINFO)
 
-    if not user32.GetCursorInfo(ctypes.byref(ci)):
-        return
-    if not (ci.flags & 0x00000001) or not ci.hCursor:  # CURSOR_SHOWING
-        return
+        if not user32.GetCursorInfo(ctypes.byref(ci)):
+            return
+        if not (ci.flags & 0x00000001) or not ci.hCursor:  # CURSOR_SHOWING
+            return
 
-    cursor_x = ci.ptScreenPos.x - region_x
-    cursor_y = ci.ptScreenPos.y - region_y
+        cursor_x = ci.ptScreenPos.x - region_x
+        cursor_y = ci.ptScreenPos.y - region_y
 
-    # 获取光标热点偏移
-    icon_info = ICONINFO()
-    if user32.GetIconInfo(ci.hCursor, ctypes.byref(icon_info)):
-        cursor_x -= icon_info.xHotspot
-        cursor_y -= icon_info.yHotspot
-        if icon_info.hbmMask:
-            gdi32.DeleteObject(icon_info.hbmMask)
-        if icon_info.hbmColor:
-            gdi32.DeleteObject(icon_info.hbmColor)
+        # 获取光标热点偏移
+        icon_info = ICONINFO()
+        if user32.GetIconInfo(ci.hCursor, ctypes.byref(icon_info)):
+            cursor_x -= icon_info.xHotspot
+            cursor_y -= icon_info.yHotspot
+            if icon_info.hbmMask:
+                gdi32.DeleteObject(icon_info.hbmMask)
+            if icon_info.hbmColor:
+                gdi32.DeleteObject(icon_info.hbmColor)
 
-    # 只在捕获区域内绘制
-    if -32 <= cursor_x < region_w and -32 <= cursor_y < region_h:
-        user32.DrawIconEx(
-            mem_dc, cursor_x, cursor_y, ci.hCursor,
-            0, 0, 0, 0, DI_NORMAL,
-        )
+        # 只在捕获区域内绘制
+        if -32 <= cursor_x < region_w and -32 <= cursor_y < region_h:
+            user32.DrawIconEx(
+                mem_dc, cursor_x, cursor_y, ci.hCursor,
+                0, 0, 0, 0, DI_NORMAL,
+            )
+    except Exception:
+        pass
 
 
 def capture_screen_frame(x: int, y: int, w: int, h: int) -> bytes | None:
@@ -513,7 +516,6 @@ class ScreenCaptureFeeder:
                 break
             except Exception:
                 # 截图异常时跳过当前帧，继续尝试
-                logger.warning("屏幕捕获帧异常，跳过")
                 pass
 
             elapsed = time.perf_counter() - start_time
