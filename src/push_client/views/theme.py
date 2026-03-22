@@ -14,6 +14,10 @@ Catppuccin Mocha 深色主题
 
 from __future__ import annotations
 
+from pathlib import Path
+
+_ASSETS_DIR = Path(__file__).resolve().parent.parent.parent.parent / "assets"
+
 
 class Theme:
     """Catppuccin Mocha 主题色板与全局样式表。
@@ -94,6 +98,11 @@ class Theme:
             color: {cls.TEXT};
         }}
 
+        /* ── 标签透明底 ── */
+        QLabel {{
+            background-color: transparent;
+        }}
+
         /* ── 按钮 ── */
         QPushButton {{
             background-color: {cls.SURFACE1};
@@ -127,6 +136,11 @@ class Theme:
         QLineEdit:focus {{
             border-color: {cls.BLUE};
         }}
+        QLineEdit:read-only {{
+            background-color: {cls.CRUST};
+            color: {cls.OVERLAY0};
+            border-color: {cls.SURFACE0};
+        }}
 
         /* ── 下拉框 ── */
         QComboBox {{
@@ -138,6 +152,11 @@ class Theme:
         }}
         QComboBox:hover {{
             border-color: {cls.BLUE};
+        }}
+        QComboBox:disabled {{
+            background-color: {cls.CRUST};
+            color: {cls.OVERLAY0};
+            border-color: {cls.SURFACE0};
         }}
         QComboBox::drop-down {{
             border: none;
@@ -156,6 +175,7 @@ class Theme:
         QCheckBox {{
             color: {cls.TEXT};
             spacing: 6px;
+            background-color: transparent;
         }}
         QCheckBox::indicator {{
             width: 16px;
@@ -165,8 +185,9 @@ class Theme:
             background-color: {cls.SURFACE0};
         }}
         QCheckBox::indicator:checked {{
-            background-color: {cls.BLUE};
             border-color: {cls.BLUE};
+            background-color: {cls.BLUE};
+            image: url("{(_ASSETS_DIR / 'checkmark.svg').as_uri()}");
         }}
 
         /* ── 滚动区域 ── */

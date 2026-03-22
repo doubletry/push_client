@@ -20,10 +20,11 @@ import subprocess
 
 from PySide6.QtCore import QObject, QTimer
 from PySide6.QtWidgets import QApplication, QSystemTrayIcon, QMenu
-from PySide6.QtGui import QAction, QCloseEvent
+from PySide6.QtGui import QAction, QCloseEvent, QIcon
 
+from .. import APP_NAME, APP_ICON_PATH
 from ..models.config import (
-    AppConfig, StreamConfig, load_config, save_config,
+    AppConfig, StreamConfig, load_config, save_config, load_stream_config,
 )
 from ..services.device_service import (
     list_cameras, list_screens, list_windows,
@@ -32,6 +33,7 @@ from ..services.ffmpeg_path import get_ffmpeg
 from ..views.main_window import MainWindow
 from ..views.stream_card import StreamCardView
 from .stream_controller import StreamController
+from ..services.log_service import logger
 
 
 class AppController(QObject):
@@ -53,28 +55,22 @@ class AppController(QObject):
         self._config = load_config()
         self._rtsp_server = self._config.rtsp_server
         self._server_locked = self._config.server_locked
-        self._default_codec = self._config.default_codec
-        self._default_width = self._config.default_width
-        self._default_height = self._config.default_height
-        self._default_fps = self._config.default_fps
-        self._default_bitrate = self._config.default_bitrate
+        self._client_id = self._config.client_id
         self._controllers: list[StreamController] = []
         self._tray: QSystemTrayIcon | None = None
 
         # 同步初始状态到 View
         self._window.set_server(self._rtsp_server)
         self._window.set_server_locked(self._server_locked)
-        self._window.set_default_codec(self._default_codec or "自动")
-        self._window.set_default_width(self._default_width)
-        self._window.set_default_height(self._default_height)
-        self._window.set_default_fps(self._default_fps)
-        self._window.set_default_bitrate(self._default_bitrate)
+        self._window.set_client_id(self._client_id)
 
         # 连接 View 信号 → Controller
         self._connect_signals()
 
         # 加载已保存的通道配置
         self._load_saved_config()
+
+        logger.info("AppController 初始化完成，加载 {} 路通道", len(self._controllers))
 
     # ==================================================================
     #  信号连接
@@ -87,12 +83,11 @@ class AppController(QObject):
         w.test_clicked.connect(self._on_test)
         w.add_stream_clicked.connect(self.add_stream)
         w.save_config_clicked.connect(self.save_config)
-        # 全局默认参数
-        w.default_codec_changed.connect(self._on_default_codec)
-        w.default_width_changed.connect(self._on_default_width)
-        w.default_height_changed.connect(self._on_default_height)
-        w.default_fps_changed.connect(self._on_default_fps)
-        w.default_bitrate_changed.connect(self._on_default_bitrate)
+        # 客户端 ID
+        w.client_id_changed.connect(self._on_client_id_changed)
+        # 全部开始/停止
+        w.start_all_clicked.connect(self._on_start_all)
+        w.stop_all_clicked.connect(self._on_stop_all)
 
         # 替换窗口的 closeEvent
         w.closeEvent = self._on_close
@@ -105,30 +100,27 @@ class AppController(QObject):
         """用户修改 RTSP 服务器地址。"""
         self._rtsp_server = url
 
-    def _on_default_codec(self, codec: str):
-        self._default_codec = codec if codec != "自动" else ""
+    def _on_client_id_changed(self, cid: str):
+        """用户修改客户端 ID。"""
+        self._client_id = cid
 
-    def _on_default_width(self, w: str):
-        self._default_width = w
+    def _on_start_all(self):
+        """全部开始推流。"""
+        started = 0
+        for ctrl in self._controllers:
+            if not ctrl.is_streaming:
+                ctrl.start_stream()
+                started += 1
+        self._window.set_status(f"已启动 {started} 路推流")
 
-    def _on_default_height(self, h: str):
-        self._default_height = h
-
-    def _on_default_fps(self, fps: str):
-        self._default_fps = fps
-
-    def _on_default_bitrate(self, br: str):
-        self._default_bitrate = br
-
-    def _get_global_defaults(self) -> dict:
-        """返回当前全局默认推流参数。"""
-        return {
-            "codec": self._default_codec,
-            "width": self._default_width,
-            "height": self._default_height,
-            "fps": self._default_fps,
-            "bitrate": self._default_bitrate,
-        }
+    def _on_stop_all(self):
+        """全部停止推流。"""
+        stopped = 0
+        for ctrl in self._controllers:
+            if ctrl.is_streaming:
+                ctrl.stop_stream()
+                stopped += 1
+        self._window.set_status(f"已停止 {stopped} 路推流")
 
     def _on_test(self):
         """测试 RTSP 服务器连接。
@@ -169,10 +161,13 @@ class AppController(QObject):
             else:
                 self._window.show_test_result(True, "服务器已响应，连接正常。")
         except subprocess.TimeoutExpired:
+            logger.warning("RTSP 连接测试超时: {}", self._rtsp_server)
             self._window.show_test_result(False, "连接超时，请检查地址和网络。")
         except FileNotFoundError:
+            logger.error("ffmpeg 可执行文件未找到")
             self._window.show_test_result(False, "未找到 ffmpeg，请确认已安装并添加到 PATH。")
         except Exception as e:
+            logger.exception("RTSP 连接测试异常")
             self._window.show_test_result(False, f"测试失败: {e}")
         finally:
             self._window.set_test_button_testing(False)
@@ -210,7 +205,7 @@ class AppController(QObject):
             card=card,
             channel_index=channel_index,
             rtsp_server_getter=lambda: self._rtsp_server,
-            global_defaults_getter=self._get_global_defaults,
+            client_id_getter=lambda: self._client_id,
             parent=self,
         )
         self._controllers.append(ctrl)
@@ -225,6 +220,7 @@ class AppController(QObject):
             lambda key: self._refresh_devices(key, card)
         )
 
+        logger.info("添加推流通道 #{}", channel_index + 1)
         self._window.set_status(f"已添加推流通道，共 {len(self._controllers)} 路")
         return ctrl
 
@@ -241,6 +237,7 @@ class AppController(QObject):
         self._window.remove_card(ctrl.card)
         self._controllers.remove(ctrl)
         ctrl.deleteLater()
+        logger.info("移除推流通道，剩余 {} 路", len(self._controllers))
         self._window.set_status(f"已移除推流通道，剩余 {len(self._controllers)} 路")
 
     # ==================================================================
@@ -303,16 +300,13 @@ class AppController(QObject):
         cfg = AppConfig(
             rtsp_server=self._rtsp_server,
             server_locked=self._server_locked,
-            default_codec=self._default_codec,
-            default_width=self._default_width,
-            default_height=self._default_height,
-            default_fps=self._default_fps,
-            default_bitrate=self._default_bitrate,
+            client_id=self._client_id,
             streams=[],
         )
         for ctrl in self._controllers:
             cfg.add_stream(ctrl.to_config())
         save_config(cfg)
+        logger.info("配置已保存，共 {} 路通道", len(cfg.streams))
         self._window.set_status("配置已保存")
 
     def _load_saved_config(self):
@@ -329,7 +323,7 @@ class AppController(QObject):
 
         for stream_data in self._config.streams:
             try:
-                cfg = StreamConfig(**stream_data)
+                cfg = load_stream_config(stream_data)
                 ctrl = self.add_stream()
                 ctrl.from_config(cfg)
                 # 如果是设备类型，自动刷新设备列表
@@ -339,7 +333,7 @@ class AppController(QObject):
                 if cfg.auto_start:
                     auto_start_ctrls.append(ctrl)
             except Exception:
-                pass
+                logger.exception("加载通道配置失败: {}", stream_data)
 
         # 延迟启动，确保所有 UI 就绪
         if auto_start_ctrls:
@@ -354,12 +348,10 @@ class AppController(QObject):
 
     def setup_tray(self):
         """创建并显示系统托盘图标和右键菜单。"""
-        icon = self._app.style().standardIcon(
-            self._app.style().StandardPixmap.SP_MediaPlay
-        )
+        icon = QIcon(APP_ICON_PATH)
 
         self._tray = QSystemTrayIcon(icon, self._app)
-        self._tray.setToolTip("RTSP 推流客户端")
+        self._tray.setToolTip(APP_NAME)
 
         menu = QMenu()
         show_action = QAction("显示主窗口", menu)
@@ -399,7 +391,7 @@ class AppController(QObject):
         self._window.hide()
         if self._tray:
             self._tray.showMessage(
-                "RTSP 推流客户端",
+                APP_NAME,
                 "窗口已最小化到托盘，双击图标可重新打开",
                 QSystemTrayIcon.MessageIcon.Information,
                 2000,

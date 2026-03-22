@@ -32,6 +32,8 @@ import time
 import subprocess
 import threading
 
+from .log_service import logger
+
 # Win32 常量
 SRCCOPY = 0x00CC0020
 DIB_RGB_COLORS = 0
@@ -40,6 +42,62 @@ PW_CLIENTONLY = 1
 PW_RENDERFULLCONTENT = 2
 DWMWA_EXTENDED_FRAME_BOUNDS = 9
 DWMWA_CLOAKED = 14
+
+# Fix restype/argtypes once at import time so that handle return values
+# (pointer-sized on 64-bit Windows) are not truncated to c_int (32 bits).
+if hasattr(ctypes, "windll"):
+    _gdi32 = ctypes.windll.gdi32
+    _user32 = ctypes.windll.user32
+
+    # GDI32 handle-returning functions
+    _gdi32.SelectObject.restype = ctypes.c_void_p
+    _gdi32.SelectObject.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+    _gdi32.CreateCompatibleDC.restype = ctypes.c_void_p
+    _gdi32.CreateCompatibleDC.argtypes = [ctypes.c_void_p]
+    _gdi32.CreateCompatibleBitmap.restype = ctypes.c_void_p
+    _gdi32.CreateCompatibleBitmap.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_int]
+
+    # GDI32 functions that accept handles
+    _gdi32.DeleteObject.argtypes = [ctypes.c_void_p]
+    _gdi32.DeleteDC.argtypes = [ctypes.c_void_p]
+    _gdi32.BitBlt.argtypes = [
+        ctypes.c_void_p, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int,
+        ctypes.c_void_p, ctypes.c_int, ctypes.c_int, ctypes.c_uint32,
+    ]
+    _gdi32.GetDIBits.argtypes = [
+        ctypes.c_void_p, ctypes.c_void_p, ctypes.c_uint, ctypes.c_uint,
+        ctypes.c_void_p, ctypes.c_void_p, ctypes.c_uint,
+    ]
+
+    # USER32 handle-returning functions
+    _user32.GetDC.restype = ctypes.c_void_p
+    _user32.GetDC.argtypes = [ctypes.c_void_p]
+    _user32.GetWindowDC.restype = ctypes.c_void_p
+    _user32.GetWindowDC.argtypes = [ctypes.c_void_p]
+    _user32.CopyIcon.restype = ctypes.c_void_p
+    _user32.CopyIcon.argtypes = [ctypes.c_void_p]
+
+    # USER32 functions that accept handles
+    _user32.ReleaseDC.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+    _user32.DrawIconEx.argtypes = [
+        ctypes.c_void_p, ctypes.c_int, ctypes.c_int, ctypes.c_void_p,
+        ctypes.c_int, ctypes.c_int, ctypes.c_uint, ctypes.c_void_p, ctypes.c_uint,
+    ]
+    _user32.DestroyIcon.argtypes = [ctypes.c_void_p]
+    _user32.PrintWindow.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_uint]
+    _user32.IsWindow.argtypes = [ctypes.c_void_p]
+    _user32.GetWindowRect.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+    _user32.GetCursorInfo.argtypes = [ctypes.c_void_p]
+    _user32.GetIconInfo.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+
+    # DWMAPI
+    try:
+        _dwmapi = ctypes.windll.dwmapi
+        _dwmapi.DwmGetWindowAttribute.argtypes = [
+            ctypes.c_void_p, ctypes.c_uint32, ctypes.c_void_p, ctypes.c_uint32,
+        ]
+    except OSError:
+        pass  # dwmapi.dll may not be available on older Windows
 
 
 class BITMAPINFOHEADER(ctypes.Structure):
@@ -147,25 +205,31 @@ def capture_window_frame_printwindow(hwnd: int, w: int, h: int) -> bytes | None:
     user32 = ctypes.windll.user32
     gdi32 = ctypes.windll.gdi32
 
+    if w <= 0 or h <= 0:
+        return None
+
     hwnd_dc = user32.GetWindowDC(hwnd)
     if not hwnd_dc:
         return None
 
     try:
         mem_dc = gdi32.CreateCompatibleDC(hwnd_dc)
+        if not mem_dc:
+            return None
         bitmap = gdi32.CreateCompatibleBitmap(hwnd_dc, w, h)
-        gdi32.SelectObject(mem_dc, bitmap)
-
-        result = user32.PrintWindow(hwnd, mem_dc, PW_RENDERFULLCONTENT)
-        if not result:
-            gdi32.DeleteObject(bitmap)
+        if not bitmap:
             gdi32.DeleteDC(mem_dc)
             return None
-
-        data = _extract_pixels(mem_dc, bitmap, w, h)
-        gdi32.DeleteObject(bitmap)
-        gdi32.DeleteDC(mem_dc)
-        return data
+        old_bitmap = gdi32.SelectObject(mem_dc, bitmap)
+        try:
+            result = user32.PrintWindow(hwnd, mem_dc, PW_RENDERFULLCONTENT)
+            if not result:
+                return None
+            return _extract_pixels(mem_dc, bitmap, w, h)
+        finally:
+            gdi32.SelectObject(mem_dc, old_bitmap)
+            gdi32.DeleteObject(bitmap)
+            gdi32.DeleteDC(mem_dc)
     finally:
         user32.ReleaseDC(hwnd, hwnd_dc)
 
@@ -194,16 +258,21 @@ def capture_window_frame_bitblt(hwnd: int) -> tuple[bytes, int, int] | None:
 
     try:
         mem_dc = gdi32.CreateCompatibleDC(screen_dc)
+        if not mem_dc:
+            return None
         bitmap = gdi32.CreateCompatibleBitmap(screen_dc, w, h)
-        gdi32.SelectObject(mem_dc, bitmap)
-
-        # 从屏幕 DC 复制窗口区域
-        gdi32.BitBlt(mem_dc, 0, 0, w, h, screen_dc, left, top, SRCCOPY)
-
-        data = _extract_pixels(mem_dc, bitmap, w, h)
-        gdi32.DeleteObject(bitmap)
-        gdi32.DeleteDC(mem_dc)
-        return data, w, h
+        if not bitmap:
+            gdi32.DeleteDC(mem_dc)
+            return None
+        old_bitmap = gdi32.SelectObject(mem_dc, bitmap)
+        try:
+            # 从屏幕 DC 复制窗口区域
+            gdi32.BitBlt(mem_dc, 0, 0, w, h, screen_dc, left, top, SRCCOPY)
+            return _extract_pixels(mem_dc, bitmap, w, h), w, h
+        finally:
+            gdi32.SelectObject(mem_dc, old_bitmap)
+            gdi32.DeleteObject(bitmap)
+            gdi32.DeleteDC(mem_dc)
     finally:
         user32.ReleaseDC(0, screen_dc)
 
@@ -324,8 +393,10 @@ class WindowCaptureFeeder:
                 self._process.stdin.flush()
 
             except (BrokenPipeError, OSError):
+                logger.debug("窗口捕获管道已关闭")
                 break
             except Exception:
+                logger.exception("窗口捕获循环异常")
                 break
 
             elapsed = time.perf_counter() - start_time
@@ -354,3 +425,219 @@ class WindowCaptureFeeder:
             ]
 
         return bytes(result)
+
+
+# ==================================================================
+#  屏幕捕获（BitBlt 管道模式，避免 gdigrab 鼠标闪烁）
+# ==================================================================
+
+DI_NORMAL = 0x0003
+
+
+class CURSORINFO(ctypes.Structure):
+    _fields_ = [
+        ("cbSize", ctypes.c_uint32),
+        ("flags", ctypes.c_uint32),
+        ("hCursor", ctypes.c_void_p),
+        ("ptScreenPos", ctypes.wintypes.POINT),
+    ]
+
+
+class ICONINFO(ctypes.Structure):
+    _fields_ = [
+        ("fIcon", ctypes.wintypes.BOOL),
+        ("xHotspot", ctypes.wintypes.DWORD),
+        ("yHotspot", ctypes.wintypes.DWORD),
+        ("hbmMask", ctypes.c_void_p),
+        ("hbmColor", ctypes.c_void_p),
+    ]
+
+
+def _get_cursor_snapshot():
+    """获取当前光标的快照信息（位置、热点、图标副本）。
+
+    通过 CopyIcon 复制光标句柄，确保在后续绘制时句柄不会被系统回收。
+
+    Returns:
+        ``(hCursorCopy, draw_x, draw_y)`` 或 ``None``（光标不可见/获取失败）。
+        调用方使用完毕后必须调用 ``DestroyIcon(hCursorCopy)`` 释放资源。
+    """
+    try:
+        user32 = ctypes.windll.user32
+        gdi32 = ctypes.windll.gdi32
+
+        ci = CURSORINFO()
+        ci.cbSize = ctypes.sizeof(CURSORINFO)
+        if not user32.GetCursorInfo(ctypes.byref(ci)):
+            return None
+        if not (ci.flags & 0x00000001) or not ci.hCursor:  # CURSOR_SHOWING
+            return None
+
+        # 复制光标句柄，使其不受系统光标切换影响
+        h_copy = user32.CopyIcon(ci.hCursor)
+        if not h_copy:
+            return None
+
+        try:
+            screen_x = ci.ptScreenPos.x
+            screen_y = ci.ptScreenPos.y
+            hotspot_x = 0
+            hotspot_y = 0
+
+            icon_info = ICONINFO()
+            if user32.GetIconInfo(h_copy, ctypes.byref(icon_info)):
+                hotspot_x = icon_info.xHotspot
+                hotspot_y = icon_info.yHotspot
+                if icon_info.hbmMask:
+                    gdi32.DeleteObject(icon_info.hbmMask)
+                if icon_info.hbmColor:
+                    gdi32.DeleteObject(icon_info.hbmColor)
+
+            return h_copy, screen_x - hotspot_x, screen_y - hotspot_y
+        except Exception:
+            user32.DestroyIcon(h_copy)
+            raise
+    except Exception:
+        logger.opt(exception=True).debug("获取光标快照失败，将跳过光标绘制")
+        return None
+
+
+def capture_screen_frame(x: int, y: int, w: int, h: int) -> bytes | None:
+    """使用 BitBlt 捕获屏幕区域并绘制鼠标光标。
+
+    流程：
+        1. 调用 :func:`_get_cursor_snapshot` 获取光标快照（CopyIcon 副本）
+        2. BitBlt(SRCCOPY) 捕获屏幕内容（不含硬件光标，不闪烁）
+        3. DrawIconEx 将光标副本绘制到离屏 DC
+        4. DestroyIcon 释放光标副本
+
+    SRCCOPY 不含 CAPTUREBLT，避免系统在 BitBlt 期间隐藏硬件光标
+    导致显示器鼠标闪烁。CopyIcon 确保光标句柄在整个绘制过程中保持有效，
+    杜绝因句柄失效导致的推流画面鼠标闪烁。
+
+    Args:
+        x: 屏幕区域左上角 X 坐标
+        y: 屏幕区域左上角 Y 坐标
+        w: 捕获宽度（像素，应为偶数）
+        h: 捕获高度（像素，应为偶数）
+
+    Returns:
+        BGRA 格式原始像素数据，捕获失败时返回 None。
+    """
+    user32 = ctypes.windll.user32
+    gdi32 = ctypes.windll.gdi32
+
+    if w <= 0 or h <= 0:
+        return None
+
+    # ① 在 BitBlt 之前获取光标快照，减少时序差异
+    cursor_snap = _get_cursor_snapshot()
+    cursor_consumed = False
+
+    screen_dc = user32.GetDC(0)
+    if not screen_dc:
+        if cursor_snap:
+            user32.DestroyIcon(cursor_snap[0])
+        return None
+
+    try:
+        mem_dc = gdi32.CreateCompatibleDC(screen_dc)
+        if not mem_dc:
+            return None
+        bitmap = gdi32.CreateCompatibleBitmap(screen_dc, w, h)
+        if not bitmap:
+            gdi32.DeleteDC(mem_dc)
+            return None
+        old_bitmap = gdi32.SelectObject(mem_dc, bitmap)
+        try:
+            # ② BitBlt(SRCCOPY)：捕获屏幕内容，不含硬件光标
+            gdi32.BitBlt(mem_dc, 0, 0, w, h, screen_dc, x, y, SRCCOPY)
+
+            # ③ 用光标副本在离屏 DC 上绘制鼠标
+            if cursor_snap:
+                h_cursor, abs_x, abs_y = cursor_snap
+                cursor_consumed = True  # will be destroyed below; outer finally must not free it
+                draw_x = abs_x - x
+                draw_y = abs_y - y
+                if -64 <= draw_x < w and -64 <= draw_y < h:
+                    user32.DrawIconEx(
+                        mem_dc, draw_x, draw_y, h_cursor,
+                        0, 0, 0, 0, DI_NORMAL,
+                    )
+                user32.DestroyIcon(h_cursor)
+
+            return _extract_pixels(mem_dc, bitmap, w, h)
+        finally:
+            gdi32.SelectObject(mem_dc, old_bitmap)
+            gdi32.DeleteObject(bitmap)
+            gdi32.DeleteDC(mem_dc)
+    finally:
+        # Release cursor if an exception prevented normal cleanup inside the try block
+        if cursor_snap and not cursor_consumed:
+            user32.DestroyIcon(cursor_snap[0])
+        user32.ReleaseDC(0, screen_dc)
+
+
+class ScreenCaptureFeeder:
+    """持续捕获屏幕区域，通过管道喂给 FFmpeg stdin。
+
+    使用 BitBlt + DrawIconEx 替代 gdigrab，彻底解决鼠标闪烁问题。
+
+    Usage::
+
+        feeder = ScreenCaptureFeeder(x=0, y=0, w=1920, h=1080, fps=30)
+        feeder.start(ffmpeg_process)
+        ...
+        feeder.stop()
+    """
+
+    def __init__(self, x: int, y: int, w: int, h: int, fps: int = 30):
+        self.x = x
+        self.y = y
+        self.w = _make_even(w)
+        self.h = _make_even(h)
+        self.fps = fps
+        self._running = False
+        self._thread: threading.Thread | None = None
+        self._process: subprocess.Popen | None = None
+
+    def start(self, ffmpeg_process: subprocess.Popen):
+        """开始喂帧。"""
+        self._process = ffmpeg_process
+        self._running = True
+        self._thread = threading.Thread(target=self._feed_loop, daemon=True)
+        self._thread.start()
+
+    def stop(self):
+        """停止喂帧。"""
+        self._running = False
+        if self._thread:
+            self._thread.join(timeout=3)
+
+    def _feed_loop(self):
+        interval = 1.0 / self.fps
+        consecutive_errors = 0
+        max_consecutive_errors = 30  # 连续错误超过此值则停止
+        while self._running and self._process and self._process.poll() is None:
+            start_time = time.perf_counter()
+            try:
+                data = capture_screen_frame(self.x, self.y, self.w, self.h)
+                if data:
+                    self._process.stdin.write(data)
+                    self._process.stdin.flush()
+                    consecutive_errors = 0
+            except (BrokenPipeError, OSError):
+                logger.debug("屏幕捕获管道已关闭")
+                break
+            except Exception:
+                consecutive_errors += 1
+                if consecutive_errors <= 3:
+                    logger.exception("屏幕捕获帧时发生未预期异常，将跳过该帧并继续尝试")
+                elif consecutive_errors == max_consecutive_errors:
+                    logger.error("屏幕捕获连续 {} 次失败，停止捕获", max_consecutive_errors)
+                    break
+
+            elapsed = time.perf_counter() - start_time
+            sleep_time = interval - elapsed
+            if sleep_time > 0:
+                time.sleep(sleep_time)

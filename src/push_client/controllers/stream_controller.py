@@ -20,7 +20,9 @@ from ..models.config import StreamConfig
 from ..services.ffmpeg_service import (
     FFmpegWorker, build_ffmpeg_command, friendly_error,
 )
+from ..services.device_service import probe_video_info, get_screen_refresh_rate
 from ..views.stream_card import StreamCardView
+from ..services.log_service import logger
 
 
 class StreamController(QObject):
@@ -36,8 +38,7 @@ class StreamController(QObject):
         card: 关联的卡片 UI 控件。
         channel_index: 通道索引。
         rtsp_server_getter: 返回当前 RTSP 服务器地址的回调。
-        global_defaults_getter: 返回全局默认参数 dict 的回调，
-            包含 ``width`` / ``height`` / ``fps`` / ``bitrate`` 键。
+        client_id_getter: 返回当前客户端 ID 的回调。
         parent: 父 QObject。
     """
 
@@ -48,21 +49,22 @@ class StreamController(QObject):
         card: StreamCardView,
         channel_index: int,
         rtsp_server_getter: callable,
-        global_defaults_getter: callable = None,
+        client_id_getter: callable = None,
         parent: QObject | None = None,
     ):
         super().__init__(parent)
         self._card = card
         self._channel_index = channel_index
         self._rtsp_server_getter = rtsp_server_getter
-        self._global_defaults_getter = global_defaults_getter
+        self._client_id_getter = client_id_getter
         self._worker: FFmpegWorker | None = None
         self._state = StreamState.IDLE
 
         # ── 内部数据（与 UI 同步）──
-        self._source_type = ""
+        self._source_type = card.get_source_type() or "video"
         self._source_path = ""
         self._stream_name = ""
+        self._title = ""
         self._loop = False
         self._preview = False
         self._video_codec = ""
@@ -70,6 +72,7 @@ class StreamController(QObject):
         self._height = ""
         self._framerate = ""
         self._bitrate = ""
+        self._rtsp_url = ""
 
         self._connect_card_signals()
 
@@ -93,7 +96,8 @@ class StreamController(QObject):
         c.fps_edited.connect(self._on_fps)
         c.bitrate_edited.connect(self._on_bitrate)
         c.loop_toggled.connect(self._on_loop)
-        c.preview_toggled.connect(self._on_preview)
+        c.preview_clicked.connect(self.toggle_preview)
+        c.title_edited.connect(self._on_title)
 
     # ── 数据同步回调 ──
 
@@ -135,8 +139,8 @@ class StreamController(QObject):
     def _on_loop(self, val: bool):
         self._loop = val
 
-    def _on_preview(self, val: bool):
-        self._preview = val
+    def _on_title(self, title: str):
+        self._title = title
 
     # ==================================================================
     #  推流控制
@@ -159,6 +163,12 @@ class StreamController(QObject):
             self._card.show_error("请输入流名称")
             return
 
+        # 获取客户端 ID
+        client_id = self._client_id_getter() if self._client_id_getter else ""
+        if not client_id:
+            self._card.show_error("请先配置客户端 ID")
+            return
+
         # ── 源类型格式校验 ──
         if self._source_type == "rtsp" and not self._source_path.startswith("rtsp://"):
             self._card.show_error("RTSP 地址格式不正确，应以 rtsp:// 开头")
@@ -169,26 +179,56 @@ class StreamController(QObject):
                 self._card.show_error("视频文件不存在，请检查路径")
                 return
 
-        rtsp_url = f"{rtsp_server.rstrip('/')}/{self._stream_name}"
+        rtsp_url = f"{rtsp_server.rstrip('/')}/{client_id}/{self._stream_name}"
+        self._rtsp_url = rtsp_url
         codec = self._video_codec if self._video_codec != "自动" else ""
 
-        # ── 合并全局默认参数：通道未设置时使用全局值 ──
+        # ── 根据视频源类型解析默认参数 ──
         width = self._width
         height = self._height
         framerate = self._framerate
         bitrate = self._bitrate
-        if self._global_defaults_getter:
-            defaults = self._global_defaults_getter()
+
+        if self._source_type == "screen":
             if not codec:
-                codec = defaults.get("codec", "")
-            if not width:
-                width = defaults.get("width", "")
-            if not height:
-                height = defaults.get("height", "")
+                codec = "libx264"
+            if self._source_path.startswith("offset:"):
+                parts = self._source_path.split(":", 1)[1].split(",")
+                if len(parts) == 4:
+                    # 管道模式: 尺寸在 rawvideo 输入参数中指定，不设 width/height
+                    if not framerate:
+                        framerate = str(get_screen_refresh_rate(
+                            int(parts[0]), int(parts[1])
+                        ))
+        elif self._source_type == "window":
+            if not codec:
+                codec = "libx264"
+            # 管道模式: 尺寸在 rawvideo 输入参数中指定，不设 width/height
             if not framerate:
-                framerate = defaults.get("fps", "")
-            if not bitrate:
-                bitrate = defaults.get("bitrate", "")
+                framerate = "30"
+        elif self._source_type == "camera":
+            if not codec:
+                codec = "libx264"
+        elif self._source_type == "video":
+            info = probe_video_info(self._source_path)
+            if not codec and info.get("codec"):
+                codec = "copy"
+            # copy 模式不需要 width/height（不能使用滤镜）
+            if codec != "copy":
+                if not width and info.get("width"):
+                    width = str(info["width"])
+                if not height and info.get("height"):
+                    height = str(info["height"])
+            if not framerate and info.get("framerate"):
+                fr = str(info["framerate"])
+                if "/" in fr:
+                    num, den = fr.split("/")
+                    framerate = str(round(int(num) / int(den)))
+                else:
+                    framerate = fr
+        elif self._source_type == "rtsp":
+            if not codec:
+                codec = "copy"
 
         try:
             cmd = build_ffmpeg_command(
@@ -209,25 +249,53 @@ class StreamController(QObject):
         # 构建 Worker 并启动
         self._worker = FFmpegWorker(self)
         self._worker.set_command(cmd)
-        if self._preview:
-            self._worker.set_preview(True, rtsp_url)
         if self._source_type == "window" and self._source_path.startswith("hwnd:"):
             hwnd = int(self._source_path.split(":")[1])
             fps = int(framerate or "30")
             self._worker.set_window_capture(hwnd, fps)
+        elif self._source_type == "screen" and self._source_path.startswith("offset:"):
+            parts = self._source_path.split(":", 1)[1].split(",")
+            if len(parts) == 4:
+                ox, oy = int(parts[0]), int(parts[1])
+                ow, oh = int(parts[2]), int(parts[3])
+                fps = int(framerate or "30")
+                self._worker.set_screen_capture(ox, oy, ow, oh, fps)
 
         # Worker 信号 → Controller → View
         self._worker.status_changed.connect(self._on_worker_status)
         self._worker.error_occurred.connect(self._on_worker_error)
         self._worker.progress_info.connect(self._on_worker_progress)
         self._worker.stopped.connect(self._on_worker_stopped)
+        self._worker.preview_closed.connect(self._on_preview_closed)
         self._worker.start()
 
+        logger.info("推流启动: ch={} url={} source={}/{}",
+                    self._channel_index, rtsp_url,
+                    self._source_type, self._source_path)
         self._set_state(StreamState.STARTING)
+
+    def toggle_preview(self):
+        """切换预览状态（仅推流中有效）。"""
+        if not self.is_streaming or not self._worker:
+            return
+        if self._preview:
+            self._worker.stop_preview_now()
+            self._preview = False
+            self._card.set_preview_active(False)
+        else:
+            self._worker.start_preview_now(self._rtsp_url)
+            self._preview = True
+            self._card.set_preview_active(True)
+
+    def _on_preview_closed(self):
+        """ffplay 预览窗口被用户关闭时回调。"""
+        self._preview = False
+        self._card.set_preview_active(False)
 
     def stop_stream(self):
         """请求停止推流。"""
         if self._worker:
+            logger.info("推流停止: ch={}", self._channel_index)
             self._set_state(StreamState.STOPPING)
             self._worker.stop()
 
@@ -252,28 +320,20 @@ class StreamController(QObject):
     def _on_worker_error(self, msg: str):
         """FFmpeg 报错。"""
         friendly = friendly_error(msg)
+        logger.error("推流错误 ch={}: {}", self._channel_index, friendly)
         self._card.set_status("错误", "error")
         self._set_state(StreamState.ERROR)
         self._card.show_error(friendly)
 
     def _on_worker_progress(self, info: dict):
         """FFmpeg 推流进度更新。"""
-        parts = []
-        if "time" in info:
-            parts.append(f"时间:{info['time']}")
-        if "fps" in info:
-            parts.append(f"帧率:{info['fps']}")
-        if "bitrate" in info:
-            parts.append(f"码率:{info['bitrate']}")
-        if "speed" in info:
-            parts.append(f"速度:{info['speed']}")
-        if "frame" in info:
-            parts.append(f"帧:{info['frame']}")
-        self._card.set_progress("  ".join(parts))
+        # 不在界面上显示进度信息
+        pass
 
     def _on_worker_stopped(self):
         """FFmpeg 进程已结束。"""
-        self._card.set_progress("")
+        self._preview = False
+        self._card.set_preview_active(False)
         self._set_state(StreamState.IDLE)
 
     # ==================================================================
@@ -322,10 +382,11 @@ class StreamController(QObject):
         codec = self._video_codec if self._video_codec != "自动" else ""
         return StreamConfig(
             name=self._stream_name,
+            title=self._title,
             source_type=self._source_type,
             source_path=self._source_path,
             loop=self._loop,
-            preview=self._preview,
+            preview=False,
             video_codec=codec,
             width=self._width,
             height=self._height,
@@ -339,8 +400,8 @@ class StreamController(QObject):
         self._source_type = cfg.source_type
         self._source_path = cfg.source_path
         self._stream_name = cfg.name
+        self._title = cfg.title
         self._loop = cfg.loop
-        self._preview = cfg.preview
         self._video_codec = cfg.video_codec if cfg.video_codec else "自动"
         self._width = cfg.width
         self._height = cfg.height
@@ -349,13 +410,21 @@ class StreamController(QObject):
 
         # 同步到 View
         card = self._card
+        if cfg.title:
+            card.set_title(cfg.title)
         card.set_source_type(cfg.source_type)
         card.set_source_path(cfg.source_path)
         card.set_stream_name(cfg.name)
         card.set_loop(cfg.loop)
-        card.set_preview(cfg.preview)
         card.set_codec(self._video_codec)
         card.set_width(cfg.width)
         card.set_height(cfg.height)
         card.set_fps(cfg.framerate)
         card.set_bitrate(cfg.bitrate)
+
+        # 有高级参数时自动展开高级面板
+        has_advanced = any([
+            cfg.video_codec, cfg.width, cfg.height,
+            cfg.framerate, cfg.bitrate,
+        ])
+        card.set_advanced_mode(has_advanced)
