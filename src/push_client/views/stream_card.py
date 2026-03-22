@@ -92,15 +92,7 @@ class StreamCardView(QFrame):
         super().__init__(parent)
         self._channel_index = channel_index
 
-        # 应用卡片级样式
         self.setFrameShape(QFrame.Shape.StyledPanel)
-        self.setStyleSheet(f"""
-            StreamCardView {{
-                background-color: {Theme.MANTLE};
-                border: 1px solid {Theme.SURFACE0};
-                border-radius: {Theme.RADIUS_LARGE}px;
-            }}
-        """)
 
         self._build_ui()
         self._connect_signals()
@@ -117,30 +109,17 @@ class StreamCardView(QFrame):
 
         # ── 标题栏（可点击编辑）──
         self._title_text = f"推流通道 {self._channel_index + 1}"
-        title_style = f"""
-            background-color: {Theme.BLUE};
-            color: {Theme.BASE};
-            font-weight: bold;
-            border-radius: {Theme.RADIUS_SMALL}px;
-            padding: 4px;
-            qproperty-alignment: AlignCenter;
-        """
 
         self._title_label = QLabel(self._title_text)
-        self._title_label.setStyleSheet(title_style)
+        title_font = QFont()
+        title_font.setBold(True)
+        self._title_label.setFont(title_font)
+        self._title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._title_label.setCursor(Qt.CursorShape.PointingHandCursor)
         self._title_label.setToolTip("点击修改通道名称")
         self._title_label.mousePressEvent = self._on_title_clicked
 
         self._title_edit = QLineEdit()
-        self._title_edit.setStyleSheet(f"""
-            background-color: {Theme.SURFACE0};
-            color: {Theme.TEXT};
-            font-weight: bold;
-            border: 2px solid {Theme.BLUE};
-            border-radius: {Theme.RADIUS_SMALL}px;
-            padding: 3px;
-        """)
         self._title_edit.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._title_edit.setVisible(False)
         self._title_edit.returnPressed.connect(self._finish_title_edit)
@@ -274,72 +253,28 @@ class StreamCardView(QFrame):
         # 开始推流
         self._start_btn = QPushButton("▶ 开始推流")
         self._start_btn.setFixedWidth(100)
-        self._start_btn.setStyleSheet(f"""
-            QPushButton {{
-                background-color: {Theme.GREEN};
-                color: {Theme.BASE};
-                font-weight: bold;
-                border: 1px solid {Theme.GREEN};
-                border-radius: {Theme.RADIUS_NORMAL}px;
-            }}
-            QPushButton:hover {{ background-color: {Theme.TEAL}; }}
-            QPushButton:disabled {{
-                background-color: {Theme.SURFACE1};
-                color: {Theme.OVERLAY0};
-                border-color: {Theme.SURFACE1};
-            }}
-        """)
         row.addWidget(self._start_btn)
 
         # 停止推流
         self._stop_btn = QPushButton("■ 停止推流")
         self._stop_btn.setFixedWidth(90)
         self._stop_btn.setEnabled(False)
-        self._stop_btn.setStyleSheet(f"""
-            QPushButton {{
-                background-color: {Theme.RED};
-                color: {Theme.BASE};
-                font-weight: bold;
-                border: 1px solid {Theme.RED};
-                border-radius: {Theme.RADIUS_NORMAL}px;
-            }}
-            QPushButton:hover {{ background-color: {Theme.MAROON}; }}
-            QPushButton:disabled {{
-                background-color: {Theme.SURFACE1};
-                color: {Theme.OVERLAY0};
-                border-color: {Theme.SURFACE1};
-            }}
-        """)
         row.addWidget(self._stop_btn)
 
         # 移除通道
         self._remove_btn = QPushButton("✕ 移除")
         self._remove_btn.setFixedWidth(70)
-        self._remove_btn.setStyleSheet(f"""
-            QPushButton {{
-                background-color: transparent;
-                color: {Theme.RED};
-                border: 1px solid {Theme.RED};
-                border-radius: {Theme.RADIUS_NORMAL}px;
-            }}
-            QPushButton:hover {{
-                background-color: {Theme.RED};
-                color: {Theme.BASE};
-            }}
-        """)
         row.addWidget(self._remove_btn)
 
         # 状态标签
         self._status_label = QLabel("就绪")
-        self._status_label.setStyleSheet(f"color: {Theme.OVERLAY0};")
         row.addWidget(self._status_label)
 
         # 进度标签
         self._progress_label = QLabel("")
         small_font = QFont()
-        small_font.setPointSize(Theme.FONT_SIZE_SMALL)
+        small_font.setPointSize(8)
         self._progress_label.setFont(small_font)
-        self._progress_label.setStyleSheet(f"color: {Theme.SUBTEXT0};")
         row.addWidget(self._progress_label, 1)  # stretch 填满
 
         return row
@@ -582,10 +517,12 @@ class StreamCardView(QFrame):
             "error": Theme.RED,
             "stopping": Theme.YELLOW,
         }
-        color = color_map.get(state, Theme.OVERLAY0)
-        bold = "font-weight: bold;" if state in ("streaming", "error") else ""
+        color = color_map.get(state, "")
         self._status_label.setText(text)
-        self._status_label.setStyleSheet(f"color: {color}; {bold}")
+        if color:
+            self._status_label.setStyleSheet(f"color: {color}; font-weight: bold;")
+        else:
+            self._status_label.setStyleSheet("")
 
     def set_progress(self, text: str):
         """更新进度信息标签。"""

@@ -370,3 +370,27 @@ class TestStreamControllerState:
             client_id_getter=lambda: "",
         )
         assert ctrl.channel_index == 5
+
+
+class TestScreenProgressSuppression:
+    """全屏画面模式不显示进度信息"""
+
+    def test_screen_source_suppresses_progress(self):
+        card = _make_mock_card()
+        ctrl = StreamController(
+            card=card, channel_index=0,
+            rtsp_server_getter=lambda: "", client_id_getter=lambda: "",
+        )
+        ctrl._source_type = "screen"
+        ctrl._on_worker_progress({"time": "00:01:00", "fps": "30", "speed": "1x"})
+        card.set_progress.assert_not_called()
+
+    def test_non_screen_source_shows_progress(self):
+        card = _make_mock_card()
+        ctrl = StreamController(
+            card=card, channel_index=0,
+            rtsp_server_getter=lambda: "", client_id_getter=lambda: "",
+        )
+        ctrl._source_type = "video"
+        ctrl._on_worker_progress({"time": "00:01:00", "fps": "30"})
+        card.set_progress.assert_called_once()

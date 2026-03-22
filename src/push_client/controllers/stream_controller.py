@@ -311,6 +311,9 @@ class StreamController(QObject):
 
     def _on_worker_progress(self, info: dict):
         """FFmpeg 推流进度更新。"""
+        # 全屏画面模式不显示进度信息
+        if self._source_type == "screen":
+            return
         parts = []
         if "time" in info:
             parts.append(f"时间:{info['time']}")

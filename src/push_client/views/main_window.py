@@ -23,7 +23,6 @@ from PySide6.QtWidgets import (
     QMessageBox, QFrame,
 )
 
-from .theme import Theme
 from .stream_card import StreamCardView
 
 
@@ -80,14 +79,6 @@ class MainWindow(QMainWindow):
         """构建全局配置卡片（标题 + RTSP/客户端 ID + 功能按钮）。"""
         card = QFrame()
         card.setFrameShape(QFrame.Shape.StyledPanel)
-        card.setStyleSheet(f"""
-            QFrame#globalCard {{
-                background-color: {Theme.MANTLE};
-                border: 1px solid {Theme.SURFACE0};
-                border-radius: {Theme.RADIUS_LARGE}px;
-            }}
-        """)
-        card.setObjectName("globalCard")
 
         layout = QVBoxLayout(card)
         layout.setContentsMargins(14, 14, 14, 14)
@@ -95,14 +86,10 @@ class MainWindow(QMainWindow):
 
         # ── 标题栏 ──
         title = QLabel("全局配置")
-        title.setStyleSheet(f"""
-            background-color: {Theme.MAUVE};
-            color: {Theme.BASE};
-            font-weight: bold;
-            border-radius: {Theme.RADIUS_SMALL}px;
-            padding: 4px;
-            qproperty-alignment: AlignCenter;
-        """)
+        title_font = QFont()
+        title_font.setBold(True)
+        title.setFont(title_font)
+        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(title)
 
         # ── 第 1 行：RTSP 服务器 + 客户端 ID + 锁定 ──
@@ -136,15 +123,6 @@ class MainWindow(QMainWindow):
         self._lock_btn = QPushButton("🔓")
         self._lock_btn.setFixedWidth(36)
         self._lock_btn.setToolTip("锁定 RTSP 地址和客户端 ID，防止误修改")
-        self._lock_btn.setStyleSheet(f"""
-            QPushButton {{
-                background-color: {Theme.SURFACE1};
-                color: {Theme.TEXT};
-                border: 1px solid {Theme.SURFACE2};
-                border-radius: {Theme.RADIUS_NORMAL}px;
-            }}
-            QPushButton:hover {{ background-color: {Theme.SURFACE2}; }}
-        """)
         self._lock_btn.clicked.connect(self._toggle_server_lock)
         toolbar.addWidget(self._lock_btn)
 
@@ -158,48 +136,18 @@ class MainWindow(QMainWindow):
         # 测试连接
         self._test_btn = QPushButton("测试连接")
         self._test_btn.setFixedWidth(90)
-        self._test_btn.setStyleSheet(f"""
-            QPushButton {{
-                background-color: {Theme.MAUVE};
-                color: {Theme.BASE};
-                font-weight: bold;
-                border: 1px solid {Theme.MAUVE};
-                border-radius: {Theme.RADIUS_NORMAL}px;
-            }}
-            QPushButton:hover {{ background-color: {Theme.LAVENDER}; }}
-        """)
         self._test_btn.clicked.connect(self.test_clicked.emit)
         bar.addWidget(self._test_btn)
 
         # 添加通道
         add_btn = QPushButton("＋ 添加通道")
         add_btn.setFixedWidth(110)
-        add_btn.setStyleSheet(f"""
-            QPushButton {{
-                background-color: {Theme.BLUE};
-                color: {Theme.BASE};
-                font-weight: bold;
-                border: 1px solid {Theme.BLUE};
-                border-radius: {Theme.RADIUS_NORMAL}px;
-            }}
-            QPushButton:hover {{ background-color: {Theme.SAPPHIRE}; }}
-        """)
         add_btn.clicked.connect(self.add_stream_clicked.emit)
         bar.addWidget(add_btn)
 
         # 保存配置
         save_btn = QPushButton("💾 保存配置")
         save_btn.setFixedWidth(100)
-        save_btn.setStyleSheet(f"""
-            QPushButton {{
-                background-color: {Theme.YELLOW};
-                color: {Theme.BASE};
-                font-weight: bold;
-                border: 1px solid {Theme.YELLOW};
-                border-radius: {Theme.RADIUS_NORMAL}px;
-            }}
-            QPushButton:hover {{ background-color: {Theme.PINK}; }}
-        """)
         save_btn.clicked.connect(self.save_config_clicked.emit)
         bar.addWidget(save_btn)
 
@@ -208,32 +156,12 @@ class MainWindow(QMainWindow):
         # 全部开始推流
         self._start_all_btn = QPushButton("▶ 全部开始推流")
         self._start_all_btn.setFixedWidth(120)
-        self._start_all_btn.setStyleSheet(f"""
-            QPushButton {{
-                background-color: {Theme.GREEN};
-                color: {Theme.BASE};
-                font-weight: bold;
-                border: 1px solid {Theme.GREEN};
-                border-radius: {Theme.RADIUS_NORMAL}px;
-            }}
-            QPushButton:hover {{ background-color: {Theme.TEAL}; }}
-        """)
         self._start_all_btn.clicked.connect(self.start_all_clicked.emit)
         bar.addWidget(self._start_all_btn)
 
         # 全部停止推流
         self._stop_all_btn = QPushButton("■ 全部停止推流")
         self._stop_all_btn.setFixedWidth(120)
-        self._stop_all_btn.setStyleSheet(f"""
-            QPushButton {{
-                background-color: {Theme.RED};
-                color: {Theme.BASE};
-                font-weight: bold;
-                border: 1px solid {Theme.RED};
-                border-radius: {Theme.RADIUS_NORMAL}px;
-            }}
-            QPushButton:hover {{ background-color: {Theme.MAROON}; }}
-        """)
         self._stop_all_btn.clicked.connect(self.stop_all_clicked.emit)
         bar.addWidget(self._stop_all_btn)
 
@@ -249,19 +177,14 @@ class MainWindow(QMainWindow):
         Args:
             locked: ``True`` 表示锁定（只读）。
         """
-        locked_style = f"background-color: {Theme.CRUST}; color: {Theme.SUBTEXT0};"
         self._server_input.setReadOnly(locked)
         self._client_id_input.setReadOnly(locked)
         if locked:
             self._lock_btn.setText("🔒")
             self._lock_btn.setToolTip("点击解锁 RTSP 地址和客户端 ID")
-            self._server_input.setStyleSheet(locked_style)
-            self._client_id_input.setStyleSheet(locked_style)
         else:
             self._lock_btn.setText("🔓")
             self._lock_btn.setToolTip("锁定 RTSP 地址和客户端 ID，防止误修改")
-            self._server_input.setStyleSheet("")
-            self._client_id_input.setStyleSheet("")
 
     def get_server_locked(self) -> bool:
         """获取 RTSP 服务器地址的锁定状态。"""
@@ -284,10 +207,9 @@ class MainWindow(QMainWindow):
         # 空状态提示
         self._empty_label = QLabel("暂无推流通道\n点击上方「＋ 添加通道」开始")
         self._empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        empty_font = QFont(Theme.FONT_FAMILY)
-        empty_font.setPointSize(Theme.FONT_SIZE_LARGE)
+        empty_font = QFont()
+        empty_font.setPointSize(11)
         self._empty_label.setFont(empty_font)
-        self._empty_label.setStyleSheet(f"color: {Theme.OVERLAY0};")
         self._cards_layout.insertWidget(0, self._empty_label)
 
         self._scroll_area.setWidget(self._cards_container)
@@ -297,22 +219,13 @@ class MainWindow(QMainWindow):
         """构建底部状态栏。"""
         bar = QWidget()
         bar.setFixedHeight(28)
-        bar.setStyleSheet(f"""
-            background-color: {Theme.MANTLE};
-            border: 1px solid {Theme.SURFACE0};
-            border-radius: {Theme.RADIUS_SMALL}px;
-        """)
         layout = QHBoxLayout(bar)
         layout.setContentsMargins(12, 0, 12, 0)
 
         self._status_label = QLabel("就绪")
-        status_font = QFont(Theme.FONT_FAMILY)
-        status_font.setPointSize(Theme.FONT_SIZE_SMALL)
+        status_font = QFont()
+        status_font.setPointSize(8)
         self._status_label.setFont(status_font)
-        self._status_label.setStyleSheet(
-            f"color: {Theme.SUBTEXT0}; "
-            f"background: transparent; border: none;"
-        )
         layout.addWidget(self._status_label)
         return bar
 

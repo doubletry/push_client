@@ -449,11 +449,11 @@ def capture_screen_frame(x: int, y: int, w: int, h: int) -> bytes | None:
         bitmap = gdi32.CreateCompatibleBitmap(screen_dc, w, h)
         gdi32.SelectObject(mem_dc, bitmap)
 
-        gdi32.BitBlt(mem_dc, 0, 0, w, h, screen_dc, x, y, SRCCOPY | CAPTUREBLT)
-        # 注意：不再手动绘制鼠标光标。
-        # Windows 10/11 的 DWM 合成器已将鼠标光标渲染到屏幕缓冲区中，
-        # BitBlt + CAPTUREBLT 能直接捕获包含光标的画面。
-        # 之前手动调用 DrawIconEx 导致光标被绘制两次，产生闪烁。
+        gdi32.BitBlt(mem_dc, 0, 0, w, h, screen_dc, x, y, SRCCOPY)
+        # 使用 SRCCOPY（不带 CAPTUREBLT）避免系统在 BitBlt 期间
+        # 隐藏硬件光标导致显示器鼠标闪烁。
+        # 手动绘制光标到离屏 DC，确保推流画面包含鼠标。
+        _draw_cursor_on_dc(mem_dc, x, y, w, h)
 
         data = _extract_pixels(mem_dc, bitmap, w, h)
         gdi32.DeleteObject(bitmap)

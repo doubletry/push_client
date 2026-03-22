@@ -47,8 +47,7 @@ def main():
     font.setPointSize(Theme.FONT_SIZE_NORMAL)
     app.setFont(font)
 
-    # ── 全局主题样式表 ──
-    app.setStyleSheet(Theme.global_stylesheet())
+    # 使用系统默认主题，不设置自定义样式表
 
     # ── 窗口图标 ──
     icon = app.style().standardIcon(app.style().StandardPixmap.SP_MediaPlay)
