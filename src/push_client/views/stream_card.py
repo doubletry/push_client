@@ -264,8 +264,8 @@ class StreamCardView(QFrame):
         self._bitrate_input.setAlignment(Qt.AlignmentFlag.AlignCenter)
         row.addWidget(self._bitrate_input)
         self._bitrate_unit_combo = QComboBox()
-        self._bitrate_unit_combo.addItems(["Kbps", "Mbps"])
-        self._bitrate_unit_combo.setCurrentText("Mbps")
+        self._bitrate_unit_combo.addItems(["K", "M"])
+        self._bitrate_unit_combo.setCurrentText("M")
         self._bitrate_unit_combo.setFixedWidth(70)
         row.addWidget(self._bitrate_unit_combo)
 
@@ -541,12 +541,14 @@ class StreamCardView(QFrame):
         self._fps_input.blockSignals(False)
 
     def get_bitrate(self) -> str:
+        """返回码率字符串，如 ``"2M"`` / ``"500K"``，空则返回 ``""``。"""
         num = self._bitrate_input.text().strip()
         if not num:
             return ""
         return num + self._bitrate_unit_combo.currentText()
 
     def set_bitrate(self, br: str):
+        """从 ``"2M"`` / ``"500K"`` 格式字符串回填码率输入和单位下拉框。"""
         self._bitrate_input.blockSignals(True)
         self._bitrate_unit_combo.blockSignals(True)
         if br and br[-1:].upper() in ("K", "M"):

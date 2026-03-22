@@ -169,8 +169,8 @@ class TestCursorDrawingResilience:
             side_effect=always_failing,
         ):
             feeder.start(mock_process)
-            import time
-            time.sleep(0.2)
+            # 等待 feeder 线程自行退出（连续错误达到阈值后会 break）
+            feeder._thread.join(timeout=5)
             feeder.stop()
         # feeder 应在达到 max_consecutive_errors (30) 时停止
         assert 30 <= call_count <= 35
