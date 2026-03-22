@@ -36,13 +36,19 @@ from .log_service import logger
 
 # Win32 常量
 SRCCOPY = 0x00CC0020
-CAPTUREBLT = 0x40000000
 DIB_RGB_COLORS = 0
 BI_RGB = 0
 PW_CLIENTONLY = 1
 PW_RENDERFULLCONTENT = 2
 DWMWA_EXTENDED_FRAME_BOUNDS = 9
 DWMWA_CLOAKED = 14
+
+# Fix SelectObject restype/argtypes once at import time so that the HGDIOBJ
+# return value (pointer-sized handle) is not truncated to c_int on 64-bit Windows.
+if hasattr(ctypes, "windll"):
+    _gdi32 = ctypes.windll.gdi32
+    _gdi32.SelectObject.restype = ctypes.c_void_p
+    _gdi32.SelectObject.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
 
 
 class BITMAPINFOHEADER(ctypes.Structure):
@@ -157,18 +163,16 @@ def capture_window_frame_printwindow(hwnd: int, w: int, h: int) -> bytes | None:
     try:
         mem_dc = gdi32.CreateCompatibleDC(hwnd_dc)
         bitmap = gdi32.CreateCompatibleBitmap(hwnd_dc, w, h)
-        gdi32.SelectObject(mem_dc, bitmap)
-
-        result = user32.PrintWindow(hwnd, mem_dc, PW_RENDERFULLCONTENT)
-        if not result:
+        old_bitmap = gdi32.SelectObject(mem_dc, bitmap)
+        try:
+            result = user32.PrintWindow(hwnd, mem_dc, PW_RENDERFULLCONTENT)
+            if not result:
+                return None
+            return _extract_pixels(mem_dc, bitmap, w, h)
+        finally:
+            gdi32.SelectObject(mem_dc, old_bitmap)
             gdi32.DeleteObject(bitmap)
             gdi32.DeleteDC(mem_dc)
-            return None
-
-        data = _extract_pixels(mem_dc, bitmap, w, h)
-        gdi32.DeleteObject(bitmap)
-        gdi32.DeleteDC(mem_dc)
-        return data
     finally:
         user32.ReleaseDC(hwnd, hwnd_dc)
 
@@ -198,15 +202,15 @@ def capture_window_frame_bitblt(hwnd: int) -> tuple[bytes, int, int] | None:
     try:
         mem_dc = gdi32.CreateCompatibleDC(screen_dc)
         bitmap = gdi32.CreateCompatibleBitmap(screen_dc, w, h)
-        gdi32.SelectObject(mem_dc, bitmap)
-
-        # 从屏幕 DC 复制窗口区域
-        gdi32.BitBlt(mem_dc, 0, 0, w, h, screen_dc, left, top, SRCCOPY)
-
-        data = _extract_pixels(mem_dc, bitmap, w, h)
-        gdi32.DeleteObject(bitmap)
-        gdi32.DeleteDC(mem_dc)
-        return data, w, h
+        old_bitmap = gdi32.SelectObject(mem_dc, bitmap)
+        try:
+            # 从屏幕 DC 复制窗口区域
+            gdi32.BitBlt(mem_dc, 0, 0, w, h, screen_dc, left, top, SRCCOPY)
+            return _extract_pixels(mem_dc, bitmap, w, h), w, h
+        finally:
+            gdi32.SelectObject(mem_dc, old_bitmap)
+            gdi32.DeleteObject(bitmap)
+            gdi32.DeleteDC(mem_dc)
     finally:
         user32.ReleaseDC(0, screen_dc)
 
@@ -455,6 +459,7 @@ def capture_screen_frame(x: int, y: int, w: int, h: int) -> bytes | None:
 
     # ① 在 BitBlt 之前获取光标快照，减少时序差异
     cursor_snap = _get_cursor_snapshot()
+    cursor_consumed = False
 
     screen_dc = user32.GetDC(0)
     if not screen_dc:
@@ -465,28 +470,33 @@ def capture_screen_frame(x: int, y: int, w: int, h: int) -> bytes | None:
     try:
         mem_dc = gdi32.CreateCompatibleDC(screen_dc)
         bitmap = gdi32.CreateCompatibleBitmap(screen_dc, w, h)
-        gdi32.SelectObject(mem_dc, bitmap)
+        old_bitmap = gdi32.SelectObject(mem_dc, bitmap)
+        try:
+            # ② BitBlt(SRCCOPY)：捕获屏幕内容，不含硬件光标
+            gdi32.BitBlt(mem_dc, 0, 0, w, h, screen_dc, x, y, SRCCOPY)
 
-        # ② BitBlt(SRCCOPY)：捕获屏幕内容，不含硬件光标
-        gdi32.BitBlt(mem_dc, 0, 0, w, h, screen_dc, x, y, SRCCOPY)
+            # ③ 用光标副本在离屏 DC 上绘制鼠标
+            if cursor_snap:
+                h_cursor, abs_x, abs_y = cursor_snap
+                cursor_consumed = True  # will be destroyed below; outer finally must not free it
+                draw_x = abs_x - x
+                draw_y = abs_y - y
+                if -64 <= draw_x < w and -64 <= draw_y < h:
+                    user32.DrawIconEx(
+                        mem_dc, draw_x, draw_y, h_cursor,
+                        0, 0, 0, 0, DI_NORMAL,
+                    )
+                user32.DestroyIcon(h_cursor)
 
-        # ③ 用光标副本在离屏 DC 上绘制鼠标
-        if cursor_snap:
-            h_cursor, abs_x, abs_y = cursor_snap
-            draw_x = abs_x - x
-            draw_y = abs_y - y
-            if -64 <= draw_x < w and -64 <= draw_y < h:
-                user32.DrawIconEx(
-                    mem_dc, draw_x, draw_y, h_cursor,
-                    0, 0, 0, 0, DI_NORMAL,
-                )
-            user32.DestroyIcon(h_cursor)
-
-        data = _extract_pixels(mem_dc, bitmap, w, h)
-        gdi32.DeleteObject(bitmap)
-        gdi32.DeleteDC(mem_dc)
-        return data
+            return _extract_pixels(mem_dc, bitmap, w, h)
+        finally:
+            gdi32.SelectObject(mem_dc, old_bitmap)
+            gdi32.DeleteObject(bitmap)
+            gdi32.DeleteDC(mem_dc)
     finally:
+        # Release cursor if an exception prevented normal cleanup inside the try block
+        if cursor_snap and not cursor_consumed:
+            user32.DestroyIcon(cursor_snap[0])
         user32.ReleaseDC(0, screen_dc)
 
 
@@ -540,7 +550,7 @@ class ScreenCaptureFeeder:
                 break
             except Exception:
                 # 截图异常时跳过当前帧，继续尝试
-                pass
+                logger.exception("屏幕捕获帧时发生未预期异常，将跳过该帧并继续尝试")
 
             elapsed = time.perf_counter() - start_time
             sleep_time = interval - elapsed
