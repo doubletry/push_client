@@ -192,6 +192,9 @@ def capture_window_frame_printwindow(hwnd: int, w: int, h: int) -> bytes | None:
     user32 = ctypes.windll.user32
     gdi32 = ctypes.windll.gdi32
 
+    if w <= 0 or h <= 0:
+        return None
+
     hwnd_dc = user32.GetWindowDC(hwnd)
     if not hwnd_dc:
         return None
