@@ -82,13 +82,21 @@ class TestCursorDrawingResilience:
         from push_client.services.window_capture import capture_screen_frame
         # _get_cursor_snapshot 返回 (hCursorCopy, draw_x, draw_y)
         fake_snap = (12345, 5, 5)  # 模拟光标句柄和位置
+        mock_windll = mock.MagicMock()
+        mock_windll.user32.GetDC.return_value = 1
+        mock_windll.gdi32.CreateCompatibleDC.return_value = 2
+        mock_windll.gdi32.CreateCompatibleBitmap.return_value = 3
+        mock_windll.gdi32.SelectObject.return_value = 4
         with mock.patch(
             "push_client.services.window_capture._extract_pixels",
             return_value=b"\x00" * 100,
         ), mock.patch(
             "push_client.services.window_capture._get_cursor_snapshot",
             return_value=fake_snap,
-        ) as mock_snap:
+        ) as mock_snap, mock.patch(
+            "push_client.services.window_capture.ctypes"
+        ) as mock_ctypes:
+            mock_ctypes.windll = mock_windll
             result = capture_screen_frame(0, 0, 10, 10)
             assert result is not None
             assert len(result) == 100
@@ -97,13 +105,21 @@ class TestCursorDrawingResilience:
     def test_capture_works_when_cursor_invisible(self):
         """光标不可见时 capture_screen_frame 仍正常返回帧数据"""
         from push_client.services.window_capture import capture_screen_frame
+        mock_windll = mock.MagicMock()
+        mock_windll.user32.GetDC.return_value = 1
+        mock_windll.gdi32.CreateCompatibleDC.return_value = 2
+        mock_windll.gdi32.CreateCompatibleBitmap.return_value = 3
+        mock_windll.gdi32.SelectObject.return_value = 4
         with mock.patch(
             "push_client.services.window_capture._extract_pixels",
             return_value=b"\x00" * 100,
         ), mock.patch(
             "push_client.services.window_capture._get_cursor_snapshot",
             return_value=None,
-        ):
+        ), mock.patch(
+            "push_client.services.window_capture.ctypes"
+        ) as mock_ctypes:
+            mock_ctypes.windll = mock_windll
             result = capture_screen_frame(0, 0, 10, 10)
             assert result is not None
             assert len(result) == 100
