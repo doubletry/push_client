@@ -85,6 +85,19 @@ if hasattr(ctypes, "windll"):
     ]
     _user32.DestroyIcon.argtypes = [ctypes.c_void_p]
     _user32.PrintWindow.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_uint]
+    _user32.IsWindow.argtypes = [ctypes.c_void_p]
+    _user32.GetWindowRect.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+    _user32.GetCursorInfo.argtypes = [ctypes.c_void_p]
+    _user32.GetIconInfo.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+
+    # DWMAPI
+    try:
+        _dwmapi = ctypes.windll.dwmapi
+        _dwmapi.DwmGetWindowAttribute.argtypes = [
+            ctypes.c_void_p, ctypes.c_uint32, ctypes.c_void_p, ctypes.c_uint32,
+        ]
+    except OSError:
+        pass  # dwmapi.dll may not be available on older Windows
 
 
 class BITMAPINFOHEADER(ctypes.Structure):
@@ -465,23 +478,27 @@ def _get_cursor_snapshot():
         if not h_copy:
             return None
 
-        screen_x = ci.ptScreenPos.x
-        screen_y = ci.ptScreenPos.y
-        hotspot_x = 0
-        hotspot_y = 0
+        try:
+            screen_x = ci.ptScreenPos.x
+            screen_y = ci.ptScreenPos.y
+            hotspot_x = 0
+            hotspot_y = 0
 
-        icon_info = ICONINFO()
-        if user32.GetIconInfo(h_copy, ctypes.byref(icon_info)):
-            hotspot_x = icon_info.xHotspot
-            hotspot_y = icon_info.yHotspot
-            if icon_info.hbmMask:
-                gdi32.DeleteObject(icon_info.hbmMask)
-            if icon_info.hbmColor:
-                gdi32.DeleteObject(icon_info.hbmColor)
+            icon_info = ICONINFO()
+            if user32.GetIconInfo(h_copy, ctypes.byref(icon_info)):
+                hotspot_x = icon_info.xHotspot
+                hotspot_y = icon_info.yHotspot
+                if icon_info.hbmMask:
+                    gdi32.DeleteObject(icon_info.hbmMask)
+                if icon_info.hbmColor:
+                    gdi32.DeleteObject(icon_info.hbmColor)
 
-        return h_copy, screen_x - hotspot_x, screen_y - hotspot_y
+            return h_copy, screen_x - hotspot_x, screen_y - hotspot_y
+        except Exception:
+            user32.DestroyIcon(h_copy)
+            raise
     except Exception:
-        logger.debug("获取光标快照失败，将跳过光标绘制")
+        logger.opt(exception=True).debug("获取光标快照失败，将跳过光标绘制")
         return None
 
 

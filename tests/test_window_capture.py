@@ -150,3 +150,27 @@ class TestCursorDrawingResilience:
             feeder.stop()
         # feeder 应调用了多次（没有在第一次异常后停止）
         assert call_count >= 2
+
+    def test_feeder_stops_after_max_consecutive_errors(self):
+        """连续异常超过上限时 feeder 自动停止循环"""
+        feeder = ScreenCaptureFeeder(0, 0, 320, 240, 1000)  # 高 fps 加速测试
+        mock_process = mock.MagicMock()
+        mock_process.poll.return_value = None  # 始终运行中
+
+        call_count = 0
+
+        def always_failing(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            raise RuntimeError("persistent error")
+
+        with mock.patch(
+            "push_client.services.window_capture.capture_screen_frame",
+            side_effect=always_failing,
+        ):
+            feeder.start(mock_process)
+            import time
+            time.sleep(0.2)
+            feeder.stop()
+        # feeder 应在达到 max_consecutive_errors (30) 时停止
+        assert 30 <= call_count <= 35
