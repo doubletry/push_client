@@ -384,7 +384,7 @@ class TestProgressSuppression:
         ctrl._source_type = "video"
         ctrl._on_worker_progress({"time": "00:01:00", "fps": "30", "speed": "1x"})
         # set_progress should never be called (method removed from card)
-        assert not hasattr(card, "set_progress")
+        card.set_progress.assert_not_called()
 
     def test_screen_progress_also_suppressed(self):
         card = _make_mock_card()
