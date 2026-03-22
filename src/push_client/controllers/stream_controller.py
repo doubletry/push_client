@@ -72,6 +72,7 @@ class StreamController(QObject):
         self._height = ""
         self._framerate = ""
         self._bitrate = ""
+        self._rtsp_url = ""
 
         self._connect_card_signals()
 
@@ -95,7 +96,7 @@ class StreamController(QObject):
         c.fps_edited.connect(self._on_fps)
         c.bitrate_edited.connect(self._on_bitrate)
         c.loop_toggled.connect(self._on_loop)
-        c.preview_toggled.connect(self._on_preview)
+        c.preview_clicked.connect(self.toggle_preview)
         c.title_edited.connect(self._on_title)
 
     # ── 数据同步回调 ──
@@ -138,9 +139,6 @@ class StreamController(QObject):
     def _on_loop(self, val: bool):
         self._loop = val
 
-    def _on_preview(self, val: bool):
-        self._preview = val
-
     def _on_title(self, title: str):
         self._title = title
 
@@ -182,6 +180,7 @@ class StreamController(QObject):
                 return
 
         rtsp_url = f"{rtsp_server.rstrip('/')}/{client_id}/{self._stream_name}"
+        self._rtsp_url = rtsp_url
         codec = self._video_codec if self._video_codec != "自动" else ""
 
         # ── 根据视频源类型解析默认参数 ──
@@ -250,8 +249,6 @@ class StreamController(QObject):
         # 构建 Worker 并启动
         self._worker = FFmpegWorker(self)
         self._worker.set_command(cmd)
-        if self._preview:
-            self._worker.set_preview(True, rtsp_url)
         if self._source_type == "window" and self._source_path.startswith("hwnd:"):
             hwnd = int(self._source_path.split(":")[1])
             fps = int(framerate or "30")
@@ -269,12 +266,31 @@ class StreamController(QObject):
         self._worker.error_occurred.connect(self._on_worker_error)
         self._worker.progress_info.connect(self._on_worker_progress)
         self._worker.stopped.connect(self._on_worker_stopped)
+        self._worker.preview_closed.connect(self._on_preview_closed)
         self._worker.start()
 
         logger.info("推流启动: ch={} url={} source={}/{}",
                     self._channel_index, rtsp_url,
                     self._source_type, self._source_path)
         self._set_state(StreamState.STARTING)
+
+    def toggle_preview(self):
+        """切换预览状态（仅推流中有效）。"""
+        if not self.is_streaming or not self._worker:
+            return
+        if self._preview:
+            self._worker.stop_preview_now()
+            self._preview = False
+            self._card.set_preview_active(False)
+        else:
+            self._worker.start_preview_now(self._rtsp_url)
+            self._preview = True
+            self._card.set_preview_active(True)
+
+    def _on_preview_closed(self):
+        """ffplay 预览窗口被用户关闭时回调。"""
+        self._preview = False
+        self._card.set_preview_active(False)
 
     def stop_stream(self):
         """请求停止推流。"""
@@ -316,6 +332,8 @@ class StreamController(QObject):
 
     def _on_worker_stopped(self):
         """FFmpeg 进程已结束。"""
+        self._preview = False
+        self._card.set_preview_active(False)
         self._set_state(StreamState.IDLE)
 
     # ==================================================================
@@ -368,7 +386,7 @@ class StreamController(QObject):
             source_type=self._source_type,
             source_path=self._source_path,
             loop=self._loop,
-            preview=self._preview,
+            preview=False,
             video_codec=codec,
             width=self._width,
             height=self._height,
@@ -384,7 +402,6 @@ class StreamController(QObject):
         self._stream_name = cfg.name
         self._title = cfg.title
         self._loop = cfg.loop
-        self._preview = cfg.preview
         self._video_codec = cfg.video_codec if cfg.video_codec else "自动"
         self._width = cfg.width
         self._height = cfg.height
@@ -399,7 +416,6 @@ class StreamController(QObject):
         card.set_source_path(cfg.source_path)
         card.set_stream_name(cfg.name)
         card.set_loop(cfg.loop)
-        card.set_preview(cfg.preview)
         card.set_codec(self._video_codec)
         card.set_width(cfg.width)
         card.set_height(cfg.height)

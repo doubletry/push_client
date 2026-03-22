@@ -23,7 +23,7 @@ def _make_mock_card():
         "browse_clicked", "refresh_clicked", "start_clicked", "stop_clicked",
         "remove_clicked", "stream_name_edited", "codec_changed",
         "width_edited", "height_edited", "fps_edited", "bitrate_edited",
-        "loop_toggled", "preview_toggled",
+        "loop_toggled", "preview_clicked", "title_edited",
     ]:
         getattr(card, sig).connect = mock.MagicMock()
     return card
@@ -395,3 +395,113 @@ class TestProgressSuppression:
         ctrl._source_type = "screen"
         ctrl._on_worker_progress({"time": "00:01:00", "fps": "30"})
         # No exception should be raised
+
+
+class TestPreviewToggle:
+    """验证预览按钮切换逻辑"""
+
+    def test_toggle_preview_ignored_when_not_streaming(self):
+        card = _make_mock_card()
+        ctrl = StreamController(
+            card=card, channel_index=0,
+            rtsp_server_getter=lambda: "rtsp://localhost:8554",
+            client_id_getter=lambda: "c1",
+        )
+        ctrl.toggle_preview()
+        # 不在推流中，不应有任何变化
+        card.set_preview_active.assert_not_called()
+
+    def test_toggle_preview_starts_preview(self):
+        card = _make_mock_card()
+        ctrl = StreamController(
+            card=card, channel_index=0,
+            rtsp_server_getter=lambda: "rtsp://localhost:8554",
+            client_id_getter=lambda: "c1",
+        )
+        worker = mock.MagicMock()
+        ctrl._worker = worker
+        ctrl._state = StreamState.STREAMING
+        ctrl._rtsp_url = "rtsp://localhost:8554/c1/s1"
+        ctrl._preview = False
+
+        ctrl.toggle_preview()
+        worker.start_preview_now.assert_called_once_with("rtsp://localhost:8554/c1/s1")
+        assert ctrl._preview is True
+        card.set_preview_active.assert_called_with(True)
+
+    def test_toggle_preview_stops_preview(self):
+        card = _make_mock_card()
+        ctrl = StreamController(
+            card=card, channel_index=0,
+            rtsp_server_getter=lambda: "rtsp://localhost:8554",
+            client_id_getter=lambda: "c1",
+        )
+        worker = mock.MagicMock()
+        ctrl._worker = worker
+        ctrl._state = StreamState.STREAMING
+        ctrl._preview = True
+
+        ctrl.toggle_preview()
+        worker.stop_preview_now.assert_called_once()
+        assert ctrl._preview is False
+        card.set_preview_active.assert_called_with(False)
+
+    def test_preview_reset_on_worker_stopped(self):
+        card = _make_mock_card()
+        ctrl = StreamController(
+            card=card, channel_index=0,
+            rtsp_server_getter=lambda: "rtsp://localhost:8554",
+            client_id_getter=lambda: "c1",
+        )
+        ctrl._preview = True
+        ctrl._on_worker_stopped()
+        assert ctrl._preview is False
+        card.set_preview_active.assert_called_with(False)
+
+    def test_start_stream_stores_rtsp_url(self):
+        card = _make_mock_card()
+        ctrl = StreamController(
+            card=card, channel_index=0,
+            rtsp_server_getter=lambda: "rtsp://localhost:8554",
+            client_id_getter=lambda: "c1",
+        )
+        ctrl._source_type = "video"
+        ctrl._source_path = __file__
+        ctrl._stream_name = "s1"
+        ctrl._video_codec = "libx264"
+
+        with mock.patch(
+            "push_client.controllers.stream_controller.build_ffmpeg_command"
+        ) as mock_build, mock.patch(
+            "push_client.controllers.stream_controller.FFmpegWorker"
+        ), mock.patch(
+            "push_client.controllers.stream_controller.probe_video_info",
+            return_value={},
+        ):
+            mock_build.return_value = ["ffmpeg", "-i", "test"]
+            ctrl.start_stream()
+            assert ctrl._rtsp_url == "rtsp://localhost:8554/c1/s1"
+
+    def test_to_config_preview_always_false(self):
+        card = _make_mock_card()
+        ctrl = StreamController(
+            card=card, channel_index=0,
+            rtsp_server_getter=lambda: "",
+            client_id_getter=lambda: "",
+        )
+        ctrl._preview = True  # 运行时preview开启
+        cfg = ctrl.to_config()
+        assert cfg.preview is False
+
+    def test_preview_closed_resets_button(self):
+        """ffplay 预览窗口被用户关闭时，按钮应重置为预览状态"""
+        card = _make_mock_card()
+        ctrl = StreamController(
+            card=card, channel_index=0,
+            rtsp_server_getter=lambda: "rtsp://localhost:8554",
+            client_id_getter=lambda: "c1",
+        )
+        ctrl._preview = True
+        ctrl._on_preview_closed()
+        assert ctrl._preview is False
+        card.set_preview_active.assert_called_with(False)

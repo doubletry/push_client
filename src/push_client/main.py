@@ -24,9 +24,10 @@ RTSP 推流客户端入口
 
 import sys
 
-from PySide6.QtGui import QFont
+from PySide6.QtGui import QFont, QIcon
 from PySide6.QtWidgets import QApplication
 
+from push_client import APP_NAME, APP_ICON_PATH
 from push_client.views.theme import Theme
 from push_client.views.main_window import MainWindow
 from push_client.controllers.app_controller import AppController
@@ -39,7 +40,7 @@ def main():
     logger.info("应用启动")
 
     app = QApplication(sys.argv)
-    app.setApplicationName("RTSP 推流客户端")
+    app.setApplicationName(APP_NAME)
     app.setQuitOnLastWindowClosed(False)
 
     # ── 全局字体 ──
@@ -51,8 +52,7 @@ def main():
     app.setStyleSheet(Theme.global_stylesheet())
 
     # ── 窗口图标 ──
-    icon = app.style().standardIcon(app.style().StandardPixmap.SP_MediaPlay)
-    app.setWindowIcon(icon)
+    app.setWindowIcon(QIcon(APP_ICON_PATH))
 
     # ── 创建 View ──
     window = MainWindow()

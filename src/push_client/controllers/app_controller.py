@@ -20,8 +20,9 @@ import subprocess
 
 from PySide6.QtCore import QObject, QTimer
 from PySide6.QtWidgets import QApplication, QSystemTrayIcon, QMenu
-from PySide6.QtGui import QAction, QCloseEvent
+from PySide6.QtGui import QAction, QCloseEvent, QIcon
 
+from .. import APP_NAME, APP_ICON_PATH
 from ..models.config import (
     AppConfig, StreamConfig, load_config, save_config, load_stream_config,
 )
@@ -347,12 +348,10 @@ class AppController(QObject):
 
     def setup_tray(self):
         """创建并显示系统托盘图标和右键菜单。"""
-        icon = self._app.style().standardIcon(
-            self._app.style().StandardPixmap.SP_MediaPlay
-        )
+        icon = QIcon(APP_ICON_PATH)
 
         self._tray = QSystemTrayIcon(icon, self._app)
-        self._tray.setToolTip("RTSP 推流客户端")
+        self._tray.setToolTip(APP_NAME)
 
         menu = QMenu()
         show_action = QAction("显示主窗口", menu)
@@ -392,7 +391,7 @@ class AppController(QObject):
         self._window.hide()
         if self._tray:
             self._tray.showMessage(
-                "RTSP 推流客户端",
+                APP_NAME,
                 "窗口已最小化到托盘，双击图标可重新打开",
                 QSystemTrayIcon.MessageIcon.Information,
                 2000,

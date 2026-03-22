@@ -305,6 +305,50 @@ class TestFFmpegWorkerInit:
         worker.set_window_capture(12345, 30)
         assert worker._window_hwnd == 12345
 
+    def test_start_preview_now_sets_state(self):
+        worker = FFmpegWorker()
+        with mock.patch.object(worker, "_start_preview"), \
+             mock.patch.object(worker, "_start_preview_monitor"):
+            worker.start_preview_now("rtsp://localhost:8554/c/s")
+            assert worker._preview_enabled is True
+            assert worker._preview_url == "rtsp://localhost:8554/c/s"
+            worker._start_preview.assert_called_once()
+            worker._start_preview_monitor.assert_called_once()
+
+    def test_stop_preview_now_sets_state(self):
+        worker = FFmpegWorker()
+        with mock.patch.object(worker, "_stop_preview"):
+            worker.stop_preview_now()
+            assert worker._preview_enabled is False
+            worker._stop_preview.assert_called_once()
+
+    def test_preview_closed_emitted_when_ffplay_exits(self):
+        """ffplay 进程退出时应发出 preview_closed 信号"""
+        worker = FFmpegWorker()
+        worker._preview_enabled = True
+        mock_proc = mock.MagicMock()
+        mock_proc.wait.return_value = 0
+        worker._preview_process = mock_proc
+
+        with mock.patch.object(worker, "preview_closed") as mock_signal:
+            worker._start_preview_monitor()
+            worker._preview_monitor_thread.join(timeout=2)
+            mock_signal.emit.assert_called_once()
+            assert worker._preview_enabled is False
+
+    def test_preview_closed_not_emitted_on_manual_stop(self):
+        """用户主动停止预览时不应发出 preview_closed 信号"""
+        worker = FFmpegWorker()
+        worker._preview_enabled = False  # 已被 stop_preview_now 置为 False
+        mock_proc = mock.MagicMock()
+        mock_proc.wait.return_value = 0
+        worker._preview_process = mock_proc
+
+        with mock.patch.object(worker, "preview_closed") as mock_signal:
+            worker._start_preview_monitor()
+            worker._preview_monitor_thread.join(timeout=2)
+            mock_signal.emit.assert_not_called()
+
 
 class TestFriendlyError:
     def test_connection_refused(self):

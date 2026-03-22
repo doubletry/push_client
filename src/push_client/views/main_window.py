@@ -27,6 +27,7 @@ from PySide6.QtWidgets import (
 
 from .stream_card import StreamCardView
 from .theme import Theme
+from .. import APP_NAME
 
 _ASSETS_DIR = Path(__file__).resolve().parent.parent.parent.parent / "assets"
 
@@ -54,7 +55,7 @@ class MainWindow(QMainWindow):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("BeaverPush - 河狸推流")
+        self.setWindowTitle(APP_NAME)
         self.resize(1100, 650)
         self.setMinimumSize(900, 400)
 

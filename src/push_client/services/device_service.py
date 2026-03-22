@@ -106,25 +106,64 @@ def list_cameras() -> list[CameraInfo]:
 def list_screens() -> list[ScreenInfo]:
     """列出系统所有显示器。
 
-    通过 ``QApplication.screens()`` 枚举显示器，包含位置和分辨率信息。
-    需要 QApplication 已实例化。
+    通过 Win32 ``EnumDisplayMonitors`` + ``GetMonitorInfoW`` 枚举显示器，
+    获取物理像素坐标，确保与 BitBlt 屏幕捕获坐标系一致。
 
     Returns:
         :class:`ScreenInfo` 列表。
     """
-    from PySide6.QtWidgets import QApplication
-    app = QApplication.instance()
-    screens = []
-    for i, screen in enumerate(app.screens()):
-        geo = screen.geometry()
-        screens.append(ScreenInfo(
-            index=i,
-            name=screen.name(),
-            width=geo.width(),
-            height=geo.height(),
-            x=geo.x(),
-            y=geo.y(),
-        ))
+    screens: list[ScreenInfo] = []
+
+    class MONITORINFOEXW(ctypes.Structure):
+        _fields_ = [
+            ("cbSize", ctypes.c_uint32),
+            ("rcMonitor", ctypes.wintypes.RECT),
+            ("rcWork", ctypes.wintypes.RECT),
+            ("dwFlags", ctypes.c_uint32),
+            ("szDevice", ctypes.c_wchar * 32),
+        ]
+
+    MONITORENUMPROC = ctypes.WINFUNCTYPE(
+        ctypes.wintypes.BOOL,
+        ctypes.c_void_p, ctypes.c_void_p,
+        ctypes.POINTER(ctypes.wintypes.RECT), ctypes.c_void_p,
+    )
+
+    def callback(hMonitor, hdcMonitor, lprcMonitor, dwData):
+        info = MONITORINFOEXW()
+        info.cbSize = ctypes.sizeof(MONITORINFOEXW)
+        if ctypes.windll.user32.GetMonitorInfoW(hMonitor, ctypes.byref(info)):
+            rc = info.rcMonitor
+            screens.append(ScreenInfo(
+                index=len(screens),
+                name=info.szDevice.rstrip('\0'),
+                width=rc.right - rc.left,
+                height=rc.bottom - rc.top,
+                x=rc.left,
+                y=rc.top,
+            ))
+        return True
+
+    ctypes.windll.user32.EnumDisplayMonitors(
+        None, None, MONITORENUMPROC(callback), 0,
+    )
+
+    # 回退到 Qt（理论上不会触发，仅为安全保护）
+    if not screens:
+        from PySide6.QtWidgets import QApplication
+        app = QApplication.instance()
+        for i, screen in enumerate(app.screens()):
+            geo = screen.geometry()
+            ratio = screen.devicePixelRatio()
+            screens.append(ScreenInfo(
+                index=i,
+                name=screen.name(),
+                width=int(geo.width() * ratio),
+                height=int(geo.height() * ratio),
+                x=int(geo.x() * ratio),
+                y=int(geo.y() * ratio),
+            ))
+
     return screens
 
 

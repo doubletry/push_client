@@ -31,6 +31,7 @@ FFmpeg 推流服务模块
 
 import subprocess
 import re
+import threading
 
 from PySide6.QtCore import QThread, Signal
 
@@ -68,6 +69,7 @@ class FFmpegWorker(QThread):
     error_occurred = Signal(str)
     progress_info = Signal(dict)
     stopped = Signal()
+    preview_closed = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -86,6 +88,7 @@ class FFmpegWorker(QThread):
         self._screen_w: int = 0
         self._screen_h: int = 0
         self._screen_fps: int = 30
+        self._preview_monitor_thread: threading.Thread | None = None
 
     def set_command(self, cmd: list[str]):
         self._cmd = cmd
@@ -104,6 +107,18 @@ class FFmpegWorker(QThread):
         self._screen_w = w
         self._screen_h = h
         self._screen_fps = fps
+
+    def start_preview_now(self, rtsp_url: str):
+        """在推流过程中动态开启预览。"""
+        self._preview_url = rtsp_url
+        self._preview_enabled = True
+        self._start_preview()
+        self._start_preview_monitor()
+
+    def stop_preview_now(self):
+        """在推流过程中动态关闭预览。"""
+        self._preview_enabled = False
+        self._stop_preview()
 
     def run(self):
         self._stop_flag = False
@@ -237,6 +252,26 @@ class FFmpegWorker(QThread):
             except Exception:
                 pass
             self._preview_process = None
+
+    def _start_preview_monitor(self):
+        """启动守护线程监控 ffplay 进程，关闭时发出 preview_closed 信号。"""
+        proc = self._preview_process
+        if not proc:
+            return
+
+        def _watch():
+            try:
+                proc.wait()
+            except Exception:
+                pass
+            # 仅当预览仍处于启用状态时才发信号（用户主动停止时已置 False）
+            if self._preview_enabled:
+                self._preview_enabled = False
+                self.preview_closed.emit()
+
+        t = threading.Thread(target=_watch, daemon=True)
+        t.start()
+        self._preview_monitor_thread = t
 
     def _cleanup(self):
         if self._capture_feeder:

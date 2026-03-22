@@ -79,7 +79,7 @@ class StreamCardView(QFrame):
     fps_edited          = Signal(str)
     bitrate_edited      = Signal(str)
     loop_toggled        = Signal(bool)
-    preview_toggled     = Signal(bool)
+    preview_clicked      = Signal()
     title_edited        = Signal(str)
 
     def __init__(self, channel_index: int, parent=None):
@@ -91,6 +91,7 @@ class StreamCardView(QFrame):
         """
         super().__init__(parent)
         self._channel_index = channel_index
+        self._config_locked = False
 
         # 应用卡片级样式
         self.setFrameShape(QFrame.Shape.StyledPanel)
@@ -219,9 +220,6 @@ class StreamCardView(QFrame):
         self._settings_combo.addItems(["基本设置", "高级设置"])
         row.addWidget(self._settings_combo)
 
-        self._preview_check = QCheckBox("预览")
-        row.addWidget(self._preview_check)
-
         return row
 
     def _build_advanced_panel(self) -> QWidget:
@@ -266,9 +264,9 @@ class StreamCardView(QFrame):
         self._bitrate_input.setAlignment(Qt.AlignmentFlag.AlignCenter)
         row.addWidget(self._bitrate_input)
         self._bitrate_unit_combo = QComboBox()
-        self._bitrate_unit_combo.addItems(["K", "M"])
-        self._bitrate_unit_combo.setCurrentText("M")
-        self._bitrate_unit_combo.setFixedWidth(55)
+        self._bitrate_unit_combo.addItems(["Kbps", "Mbps"])
+        self._bitrate_unit_combo.setCurrentText("Mbps")
+        self._bitrate_unit_combo.setFixedWidth(70)
         row.addWidget(self._bitrate_unit_combo)
 
         row.addStretch()
@@ -280,7 +278,7 @@ class StreamCardView(QFrame):
         row.setSpacing(8)
 
         # 开始推流
-        self._start_btn = QPushButton("▶ 开始推流")
+        self._start_btn = QPushButton("\u25b6 开始推流")
         self._start_btn.setFixedWidth(100)
         self._start_btn.setStyleSheet(f"""
             QPushButton {{
@@ -298,6 +296,27 @@ class StreamCardView(QFrame):
             }}
         """)
         row.addWidget(self._start_btn)
+
+        # 预览按钮（仅推流中可用）
+        self._preview_btn = QPushButton("\U0001f441 预览")
+        self._preview_btn.setFixedWidth(90)
+        self._preview_btn.setEnabled(False)
+        self._preview_btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {Theme.BLUE};
+                color: {Theme.BASE};
+                font-weight: bold;
+                border: 1px solid {Theme.BLUE};
+                border-radius: {Theme.RADIUS_NORMAL}px;
+            }}
+            QPushButton:hover {{ background-color: {Theme.SAPPHIRE}; }}
+            QPushButton:disabled {{
+                background-color: {Theme.SURFACE1};
+                color: {Theme.OVERLAY0};
+                border-color: {Theme.SURFACE1};
+            }}
+        """)
+        row.addWidget(self._preview_btn)
 
         # 停止推流
         self._stop_btn = QPushButton("■ 停止推流")
@@ -374,7 +393,8 @@ class StreamCardView(QFrame):
         self._bitrate_unit_combo.currentTextChanged.connect(self._emit_bitrate)
         # 复选框
         self._loop_check.toggled.connect(self.loop_toggled.emit)
-        self._preview_check.toggled.connect(self.preview_toggled.emit)
+        # 预览按钮
+        self._preview_btn.clicked.connect(self.preview_clicked.emit)
         # 高级/基本设置切换
         self._settings_combo.currentIndexChanged.connect(self._on_settings_mode_changed)
 
@@ -425,6 +445,8 @@ class StreamCardView(QFrame):
 
     def _on_title_clicked(self, _event):
         """点击标题标签，切换为编辑模式。"""
+        if self._config_locked:
+            return
         self._title_label.setVisible(False)
         self._title_edit.setText(self._title_text)
         self._title_edit.setVisible(True)
@@ -550,13 +572,9 @@ class StreamCardView(QFrame):
         self._loop_check.setChecked(val)
         self._loop_check.blockSignals(False)
 
-    def get_preview(self) -> bool:
-        return self._preview_check.isChecked()
-
-    def set_preview(self, val: bool):
-        self._preview_check.blockSignals(True)
-        self._preview_check.setChecked(val)
-        self._preview_check.blockSignals(False)
+    def set_preview_active(self, active: bool):
+        """更新预览按钮文本以反映当前预览状态。"""
+        self._preview_btn.setText("\u25a0 停止预览" if active else "\U0001f441 预览")
 
     # ── 设备列表管理 ──
 
@@ -612,6 +630,9 @@ class StreamCardView(QFrame):
         """
         self._start_btn.setEnabled(not is_streaming)
         self._stop_btn.setEnabled(is_streaming)
+        self._preview_btn.setEnabled(is_streaming)
+        if not is_streaming:
+            self._preview_btn.setText("\U0001f441 预览")
         self._remove_btn.setEnabled(not is_streaming)
 
     def set_can_start(self, can: bool):
@@ -653,4 +674,11 @@ class StreamCardView(QFrame):
         self._fps_input.setReadOnly(read_only)
         self._bitrate_input.setReadOnly(read_only)
         self._bitrate_unit_combo.setEnabled(not locked)
-        self._preview_check.setEnabled(not locked)
+        self._config_locked = locked
+        # 推流中时禁止编辑标题
+        if locked:
+            self._title_label.setCursor(Qt.CursorShape.ArrowCursor)
+            self._title_label.setToolTip("推流中不可修改通道名称")
+        else:
+            self._title_label.setCursor(Qt.CursorShape.PointingHandCursor)
+            self._title_label.setToolTip("点击修改通道名称")
