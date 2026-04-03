@@ -42,6 +42,7 @@ from .log_service import logger
 
 # Windows-only subprocess flag; on Unix the attribute does not exist and falls back to 0.
 CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+# RTSP 读写超时，单位微秒（10 秒）。
 RTSP_IO_TIMEOUT_US = "10000000"
 DEFAULT_STARTUP_TIMEOUT_SECONDS = 8.0
 RTSP_STARTUP_TIMEOUT_SECONDS = 12.0
@@ -336,7 +337,11 @@ class FFmpegWorker(QThread):
                 msg = "等待 RTSP 源数据超时，请检查源地址、网络或设备状态。"
             else:
                 msg = "启动超时，长时间未收到数据，请检查输入源状态。"
-            logger.warning("FFmpeg 启动超时 source_type={}", self._source_type)
+            logger.warning(
+                "FFmpeg 启动超时 source_type={} timeout={}s",
+                self._source_type,
+                timeout,
+            )
             self.error_occurred.emit(msg)
             try:
                 current.terminate()
