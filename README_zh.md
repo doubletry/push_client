@@ -19,7 +19,7 @@
 
 ## 下载安装
 
-从 [GitHub Releases](https://github.com/doubletry/push_client/releases) 下载最新安装包。安装包已内置 FFmpeg，无需额外配置。
+从 [GitHub Releases](https://github.com/doubletry/BeaverPush/releases) 下载最新安装包。安装包已内置 FFmpeg，无需额外配置。
 
 ## 开发环境搭建
 
@@ -38,7 +38,7 @@ poetry install
 # 运行应用
 poetry run push-client
 # 或
-poetry run python -m push_client.main
+poetry run python -m beaverpush.main
 ```
 
 ### 运行测试
@@ -86,7 +86,7 @@ poetry run pytest
 ## 项目结构
 
 ```
-src/push_client/
+src/beaverpush/
 ├── main.py                      # 应用入口
 ├── models/
 │   ├── config.py                # JSON 配置持久化 (AppConfig, StreamConfig)

@@ -1,4 +1,4 @@
-"""push_client 包常量"""
+"""beaverpush 包常量"""
 
 import os
 import sys

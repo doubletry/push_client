@@ -10,7 +10,7 @@
 
 使用方式::
 
-    from push_client.services.log_service import logger
+    from beaverpush.services.log_service import logger
 
     logger.info("推流已启动")
     logger.error("连接失败: {}", err)
@@ -36,7 +36,7 @@ def setup_logging():
     logger.remove()  # 移除默认 handler
 
     LOG_DIR.mkdir(parents=True, exist_ok=True)
-    log_file = LOG_DIR / "push_client_{time:YYYY-MM-DD}.log"
+    log_file = LOG_DIR / "beaverpush_{time:YYYY-MM-DD}.log"
 
     # 文件日志：记录所有级别，按天轮转，保留 3 天
     logger.add(

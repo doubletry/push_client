@@ -39,11 +39,11 @@ jobs:
       - name: Download FFmpeg
         shell: pwsh
         run: |
-          $ffmpegUrl = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip"
+          $ffmpegUrl = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl-shared.zip"
           $zipPath = "$env:RUNNER_TEMP\ffmpeg.zip"
           $extractPath = "$env:RUNNER_TEMP\ffmpeg-extract"
 
-          Write-Host "Downloading FFmpeg..."
+          Write-Host "Downloading FFmpeg (shared build)..."
           Invoke-WebRequest -Uri $ffmpegUrl -OutFile $zipPath -UseBasicParsing
 
           Write-Host "Extracting FFmpeg..."
@@ -56,13 +56,15 @@ jobs:
             exit 1
           }
 
-          # Copy ffmpeg binaries to project ffmpeg/ directory
+          # Copy ffmpeg executables and shared libraries to project ffmpeg/ directory
           New-Item -ItemType Directory -Path "ffmpeg" -Force | Out-Null
           Copy-Item "$($binDir.FullName)\ffmpeg.exe" -Destination "ffmpeg\ffmpeg.exe"
           Copy-Item "$($binDir.FullName)\ffplay.exe" -Destination "ffmpeg\ffplay.exe"
           Copy-Item "$($binDir.FullName)\ffprobe.exe" -Destination "ffmpeg\ffprobe.exe"
+          # Copy all DLL files required by the shared build
+          Copy-Item "$($binDir.FullName)\*.dll" -Destination "ffmpeg\"
 
-          Write-Host "FFmpeg binaries copied to ffmpeg/"
+          Write-Host "FFmpeg binaries and shared libraries copied to ffmpeg/"
           Get-ChildItem "ffmpeg"
 
       - name: Install Inno Setup
