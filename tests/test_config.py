@@ -163,6 +163,8 @@ class TestLoadStreamConfig:
         assert cfg.name == "s1"
         assert cfg.source_type == ""
         assert cfg.title == ""
+        assert cfg.source_reconnect_interval == 5
+        assert cfg.source_reconnect_max_attempts == 0
 
     def test_empty_data(self):
         cfg = load_stream_config({})

@@ -560,16 +560,21 @@ class StreamCardView(QFrame):
         self._fps_input.blockSignals(False)
 
     def get_bitrate(self) -> str:
-        """返回码率字符串，如 ``"2M"`` / ``"500K"``，空则返回 ``""``。"""
+        """返回码率字符串，如 ``"2M"``，空则返回 ``""``。"""
         num = self._bitrate_input.text().strip()
         if not num:
             return ""
         return num if num.upper().endswith("M") else f"{num}M"
 
     def set_bitrate(self, br: str):
-        """从 ``"2M"`` / ``"500K"`` 格式字符串回填码率输入框。"""
+        """从 ``"2M"`` 格式字符串回填码率输入框，旧版 ``K`` 单位会换算为 ``M``。"""
         self._bitrate_input.blockSignals(True)
-        if br and br[-1:].upper() in ("K", "M"):
+        if br and br[-1:].upper() == "K":
+            try:
+                self._bitrate_input.setText(f"{float(br[:-1]) / 1000:g}")
+            except ValueError:
+                self._bitrate_input.setText(br[:-1])
+        elif br and br[-1:].upper() == "M":
             self._bitrate_input.setText(br[:-1])
         else:
             self._bitrate_input.setText(br)
