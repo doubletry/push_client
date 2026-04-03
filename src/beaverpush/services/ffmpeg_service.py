@@ -543,7 +543,7 @@ def friendly_error(msg: str) -> str:
 
 
 def check_rtsp_server_reachable(rtsp_server: str, timeout: int = 10) -> tuple[bool, str]:
-    """检测 RTSP 推流服务器是否可写。"""
+    """检测 RTSP 推流服务器是否可达。"""
     try:
         result = subprocess.run(
             [

@@ -388,13 +388,16 @@ class StreamController(QObject):
         if reason == "server":
             interval = max(1, self._server_reconnect_interval_getter())
             max_attempts = max(0, self._server_reconnect_max_attempts_getter())
-            if max_attempts and self._server_retry_count >= max_attempts:
+            if self._should_stop_retrying(self._server_retry_count, max_attempts):
                 return False
             self._server_retry_count += 1
             status = self._format_retry_status("服务器失联", interval, self._server_retry_count)
         elif reason == "source":
             interval = max(1, self._source_reconnect_interval)
-            if self._source_reconnect_max_attempts and self._source_retry_count >= self._source_reconnect_max_attempts:
+            if self._should_stop_retrying(
+                self._source_retry_count,
+                self._source_reconnect_max_attempts,
+            ):
                 return False
             self._source_retry_count += 1
             status = self._format_retry_status("源失联", interval, self._source_retry_count)
@@ -559,3 +562,7 @@ class StreamController(QObject):
     def _report_status(self, message: str):
         if self._status_reporter:
             self._status_reporter(message)
+
+    @staticmethod
+    def _should_stop_retrying(retry_count: int, max_attempts: int) -> bool:
+        return max_attempts > 0 and retry_count >= max_attempts

@@ -64,7 +64,7 @@ class AppController(QObject):
         self._window.set_server_locked(self._server_locked)
         self._window.set_client_id(self._client_id)
         self._window.set_server_reconnect_interval(self._server_reconnect_interval)
-        self._window.set_server_reconnect_duration(self._server_reconnect_max_attempts)
+        self._window.set_server_reconnect_max_attempts(self._server_reconnect_max_attempts)
 
         # 连接 View 信号 → Controller
         self._connect_signals()
@@ -83,7 +83,7 @@ class AppController(QObject):
         w = self._window
         w.server_changed.connect(self._on_server_changed)
         w.server_reconnect_interval_changed.connect(self._on_server_reconnect_interval_changed)
-        w.server_reconnect_duration_changed.connect(self._on_server_reconnect_duration_changed)
+        w.server_reconnect_max_attempts_changed.connect(self._on_server_reconnect_max_attempts_changed)
         w.test_clicked.connect(self._on_test)
         w.add_stream_clicked.connect(self.add_stream)
         w.save_config_clicked.connect(self.save_config)
@@ -111,7 +111,7 @@ class AppController(QObject):
     def _on_server_reconnect_interval_changed(self, value: str):
         self._server_reconnect_interval = self._parse_positive_int(value, 5)
 
-    def _on_server_reconnect_duration_changed(self, value: str):
+    def _on_server_reconnect_max_attempts_changed(self, value: str):
         self._server_reconnect_max_attempts = self._parse_non_negative_int(value, 0)
 
     def _on_start_all(self):
