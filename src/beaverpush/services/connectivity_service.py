@@ -13,7 +13,9 @@ from PySide6.QtCore import QThread, Signal
 
 from .log_service import logger
 
+# ``(ok, message)`` 格式的后台检测函数。
 CheckCallable = Callable[[], tuple[bool, str]]
+# ``(阶段提示, 检测函数, 失败消息前缀)``。
 CheckTask = tuple[str, CheckCallable, str]
 
 

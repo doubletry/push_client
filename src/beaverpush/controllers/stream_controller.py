@@ -27,11 +27,13 @@ from ..services.device_service import probe_video_info, get_screen_refresh_rate,
 from ..views.stream_card import StreamCardView
 from ..services.log_service import logger
 
+# 用于识别“推流目标服务器异常”的 FFmpeg 错误关键词。
 SERVER_ERROR_KEYWORDS = (
     "connection refused", "no route to host", "timed out", "timeout",
     "broken pipe", "could not write header", "error writing trailer",
     "av_interleaved_write_frame", "connection reset",
 )
+# 用于识别“RTSP 输入源异常”的 FFmpeg 错误关键词。
 RTSP_SOURCE_ERROR_KEYWORDS = (
     "method describe failed", "404", "401", "could not find codec parameters",
     "invalid data", "could not open", "end of file",
