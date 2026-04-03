@@ -7,16 +7,16 @@ from unittest import mock
 
 import pytest
 
-from push_client.services.single_instance import SingleInstanceGuard
+from beaverpush.services.single_instance import SingleInstanceGuard
 
 
 @pytest.fixture
 def _patch_qt_network():
     """统一 patch QLocalSocket 和 QLocalServer。"""
     with mock.patch(
-        "push_client.services.single_instance.QLocalSocket"
+        "beaverpush.services.single_instance.QLocalSocket"
     ) as MockSocket, mock.patch(
-        "push_client.services.single_instance.QLocalServer"
+        "beaverpush.services.single_instance.QLocalServer"
     ) as MockServer:
         yield MockSocket, MockServer
 

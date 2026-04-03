@@ -5,12 +5,12 @@
 使用 loguru 统一管理应用日志，按天轮转并保留最近 3 天的日志文件。
 
 日志文件位置:
-    - Windows: ``%APPDATA%/PushClient/logs/``
-    - 其他:    ``~/PushClient/logs/``
+    - Windows: ``%APPDATA%/BeaverPush/logs/``
+    - 其他:    ``~/BeaverPush/logs/``
 
 使用方式::
 
-    from push_client.services.log_service import logger
+    from beaverpush.services.log_service import logger
 
     logger.info("推流已启动")
     logger.error("连接失败: {}", err)
@@ -22,7 +22,7 @@ from pathlib import Path
 
 from loguru import logger
 
-LOG_DIR = Path(os.environ.get("APPDATA", Path.home())) / "PushClient" / "logs"
+LOG_DIR = Path(os.environ.get("APPDATA", Path.home())) / "BeaverPush" / "logs"
 
 
 def setup_logging():
@@ -36,7 +36,7 @@ def setup_logging():
     logger.remove()  # 移除默认 handler
 
     LOG_DIR.mkdir(parents=True, exist_ok=True)
-    log_file = LOG_DIR / "push_client_{time:YYYY-MM-DD}.log"
+    log_file = LOG_DIR / "beaverpush_{time:YYYY-MM-DD}.log"
 
     # 文件日志：记录所有级别，按天轮转，保留 3 天
     logger.add(

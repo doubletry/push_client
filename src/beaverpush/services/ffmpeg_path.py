@@ -10,7 +10,7 @@ FFmpeg 可执行文件路径解析
 
 使用方式::
 
-    from push_client.services.ffmpeg_path import get_ffmpeg, get_ffplay, get_ffprobe
+    from beaverpush.services.ffmpeg_path import get_ffmpeg, get_ffplay, get_ffprobe
 
     cmd = [get_ffmpeg(), "-y", "-i", ...]
 """

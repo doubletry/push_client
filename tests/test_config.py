@@ -5,7 +5,7 @@ import tempfile
 from pathlib import Path
 from unittest import mock
 
-from push_client.models.config import (
+from beaverpush.models.config import (
     AppConfig, StreamConfig, load_config, save_config, load_stream_config,
 )
 
@@ -54,6 +54,10 @@ class TestAppConfig:
         assert cfg.client_id == ""
         assert cfg.streams == []
 
+    def test_config_dir_uses_beaverpush_name(self):
+        from beaverpush.models.config import CONFIG_DIR
+        assert CONFIG_DIR.name == "BeaverPush"
+
     def test_has_client_id(self):
         """验证 AppConfig 包含 client_id 字段（无全局默认参数）"""
         cfg = AppConfig(client_id="client01")
@@ -77,8 +81,8 @@ class TestAppConfig:
 class TestConfigPersistence:
     def test_save_and_load(self, tmp_path):
         config_file = tmp_path / "config.json"
-        with mock.patch("push_client.models.config.CONFIG_FILE", config_file), \
-             mock.patch("push_client.models.config.CONFIG_DIR", tmp_path):
+        with mock.patch("beaverpush.models.config.CONFIG_FILE", config_file), \
+             mock.patch("beaverpush.models.config.CONFIG_DIR", tmp_path):
             cfg = AppConfig(
                 rtsp_server="rtsp://test:8554",
                 server_locked=True,
@@ -97,7 +101,7 @@ class TestConfigPersistence:
 
     def test_load_missing_file(self, tmp_path):
         config_file = tmp_path / "nonexistent.json"
-        with mock.patch("push_client.models.config.CONFIG_FILE", config_file):
+        with mock.patch("beaverpush.models.config.CONFIG_FILE", config_file):
             cfg = load_config()
             assert cfg.rtsp_server == ""
             assert cfg.client_id == ""
@@ -131,6 +135,6 @@ class TestLoadStreamConfig:
     def test_load_corrupt_file(self, tmp_path):
         config_file = tmp_path / "config.json"
         config_file.write_text("not json", encoding="utf-8")
-        with mock.patch("push_client.models.config.CONFIG_FILE", config_file):
+        with mock.patch("beaverpush.models.config.CONFIG_FILE", config_file):
             cfg = load_config()
             assert cfg.rtsp_server == ""

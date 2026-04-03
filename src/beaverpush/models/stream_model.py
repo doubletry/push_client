@@ -15,7 +15,7 @@
      │  （任何阶段出错）
      └────────── ERROR
 
-控制器 (:class:`~push_client.controllers.stream_controller.StreamController`)
+控制器 (:class:`~beaverpush.controllers.stream_controller.StreamController`)
 根据 FFmpegWorker 的信号驱动状态流转，并将当前状态反映到视图层。
 """
 

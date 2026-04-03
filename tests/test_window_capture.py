@@ -6,7 +6,7 @@
 from unittest import mock
 import ctypes
 
-from push_client.services.window_capture import (
+from beaverpush.services.window_capture import (
     _make_even,
     ScreenCaptureFeeder,
     SRCCOPY,
@@ -45,7 +45,7 @@ class TestScreenCaptureFeeder:
         mock_process = mock.MagicMock()
         mock_process.poll.return_value = 0  # 已退出
         with mock.patch(
-            "push_client.services.window_capture.capture_screen_frame",
+            "beaverpush.services.window_capture.capture_screen_frame",
             return_value=None,
         ):
             feeder.start(mock_process)
@@ -58,19 +58,19 @@ class TestScreenCaptureStructures:
     """验证屏幕捕获结构体和常量已正确定义"""
 
     def test_cursorinfo_struct_exists(self):
-        from push_client.services.window_capture import CURSORINFO
+        from beaverpush.services.window_capture import CURSORINFO
         ci = CURSORINFO()
         ci.cbSize = ctypes.sizeof(CURSORINFO)
         assert ci.cbSize > 0
 
     def test_iconinfo_struct_exists(self):
-        from push_client.services.window_capture import ICONINFO
+        from beaverpush.services.window_capture import ICONINFO
         ii = ICONINFO()
         assert hasattr(ii, "xHotspot")
         assert hasattr(ii, "yHotspot")
 
     def test_di_normal_constant(self):
-        from push_client.services.window_capture import DI_NORMAL
+        from beaverpush.services.window_capture import DI_NORMAL
         assert DI_NORMAL == 0x0003
 
 
@@ -79,7 +79,7 @@ class TestCursorDrawingResilience:
 
     def test_cursor_snapshot_used_in_capture(self):
         """capture_screen_frame 通过 CopyIcon 快照绘制鼠标光标"""
-        from push_client.services.window_capture import capture_screen_frame
+        from beaverpush.services.window_capture import capture_screen_frame
         # _get_cursor_snapshot 返回 (hCursorCopy, draw_x, draw_y)
         fake_snap = (12345, 5, 5)  # 模拟光标句柄和位置
         mock_windll = mock.MagicMock()
@@ -88,13 +88,13 @@ class TestCursorDrawingResilience:
         mock_windll.gdi32.CreateCompatibleBitmap.return_value = 3
         mock_windll.gdi32.SelectObject.return_value = 4
         with mock.patch(
-            "push_client.services.window_capture._extract_pixels",
+            "beaverpush.services.window_capture._extract_pixels",
             return_value=b"\x00" * 100,
         ), mock.patch(
-            "push_client.services.window_capture._get_cursor_snapshot",
+            "beaverpush.services.window_capture._get_cursor_snapshot",
             return_value=fake_snap,
         ) as mock_snap, mock.patch(
-            "push_client.services.window_capture.ctypes"
+            "beaverpush.services.window_capture.ctypes"
         ) as mock_ctypes:
             mock_ctypes.windll = mock_windll
             result = capture_screen_frame(0, 0, 10, 10)
@@ -104,20 +104,20 @@ class TestCursorDrawingResilience:
 
     def test_capture_works_when_cursor_invisible(self):
         """光标不可见时 capture_screen_frame 仍正常返回帧数据"""
-        from push_client.services.window_capture import capture_screen_frame
+        from beaverpush.services.window_capture import capture_screen_frame
         mock_windll = mock.MagicMock()
         mock_windll.user32.GetDC.return_value = 1
         mock_windll.gdi32.CreateCompatibleDC.return_value = 2
         mock_windll.gdi32.CreateCompatibleBitmap.return_value = 3
         mock_windll.gdi32.SelectObject.return_value = 4
         with mock.patch(
-            "push_client.services.window_capture._extract_pixels",
+            "beaverpush.services.window_capture._extract_pixels",
             return_value=b"\x00" * 100,
         ), mock.patch(
-            "push_client.services.window_capture._get_cursor_snapshot",
+            "beaverpush.services.window_capture._get_cursor_snapshot",
             return_value=None,
         ), mock.patch(
-            "push_client.services.window_capture.ctypes"
+            "beaverpush.services.window_capture.ctypes"
         ) as mock_ctypes:
             mock_ctypes.windll = mock_windll
             result = capture_screen_frame(0, 0, 10, 10)
@@ -141,7 +141,7 @@ class TestCursorDrawingResilience:
             return None
 
         with mock.patch(
-            "push_client.services.window_capture.capture_screen_frame",
+            "beaverpush.services.window_capture.capture_screen_frame",
             side_effect=failing_capture,
         ):
             feeder.start(mock_process)
@@ -165,7 +165,7 @@ class TestCursorDrawingResilience:
             raise RuntimeError("persistent error")
 
         with mock.patch(
-            "push_client.services.window_capture.capture_screen_frame",
+            "beaverpush.services.window_capture.capture_screen_frame",
             side_effect=always_failing,
         ):
             feeder.start(mock_process)

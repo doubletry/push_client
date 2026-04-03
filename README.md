@@ -19,7 +19,7 @@ A multi-channel RTSP streaming desktop client built with **PySide6 + MVC archite
 
 ## Download
 
-Download the latest installer from [GitHub Releases](https://github.com/doubletry/push_client/releases). The installer bundles FFmpeg — no additional setup required.
+Download the latest installer from [GitHub Releases](https://github.com/doubletry/BeaverPush/releases). The installer bundles FFmpeg — no additional setup required.
 
 ## Development Setup
 
@@ -36,9 +36,9 @@ Download the latest installer from [GitHub Releases](https://github.com/doubletr
 poetry install
 
 # Run the application
-poetry run push-client
+poetry run beaverpush
 # or
-poetry run python -m push_client.main
+poetry run python -m beaverpush.main
 ```
 
 ### Run Tests
@@ -86,7 +86,7 @@ Toggle **Advanced** mode on a channel card to configure:
 ## Project Structure
 
 ```
-src/push_client/
+src/beaverpush/
 ├── main.py                      # Application entry point
 ├── models/
 │   ├── config.py                # JSON config persistence (AppConfig, StreamConfig)

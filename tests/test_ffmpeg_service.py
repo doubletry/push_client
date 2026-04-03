@@ -3,7 +3,7 @@
 import subprocess
 from unittest import mock
 
-from push_client.services.ffmpeg_service import (
+from beaverpush.services.ffmpeg_service import (
     build_ffmpeg_command, friendly_error, _make_even, FFmpegWorker,
 )
 
@@ -98,7 +98,7 @@ class TestBuildFfmpegCommandScreen:
 class TestBuildFfmpegCommandWindow:
     def test_window_uses_rawvideo_pipe(self):
         with mock.patch(
-            "push_client.services.ffmpeg_service.get_window_rect",
+            "beaverpush.services.ffmpeg_service.get_window_rect",
             return_value=(0, 0, 800, 600),
         ):
             cmd = build_ffmpeg_command(
@@ -111,7 +111,7 @@ class TestBuildFfmpegCommandWindow:
 
     def test_window_uses_wallclock_timestamps(self):
         with mock.patch(
-            "push_client.services.ffmpeg_service.get_window_rect",
+            "beaverpush.services.ffmpeg_service.get_window_rect",
             return_value=(0, 0, 800, 600),
         ):
             cmd = build_ffmpeg_command(
@@ -233,7 +233,7 @@ class TestBuildFfmpegCommandScreenNoFilter:
 
     def test_window_no_scale_filter(self):
         with mock.patch(
-            "push_client.services.ffmpeg_service.get_window_rect",
+            "beaverpush.services.ffmpeg_service.get_window_rect",
             return_value=(0, 0, 800, 600),
         ):
             cmd = build_ffmpeg_command(

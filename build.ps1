@@ -3,7 +3,7 @@
     使用 Nuitka 编译构建 BeaverPush 项目。
 
 .DESCRIPTION
-    将 push_client 编译为独立可执行文件 BeaverPush.exe，
+    将 beaverpush 编译为独立可执行文件 BeaverPush.exe，
     输出到 dist 目录，不显示控制台窗口。
 
 .NOTES
@@ -23,7 +23,7 @@ $ErrorActionPreference = "Stop"
 $ProjectRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 
 # ── 基本 参数 ──
-$EntryPoint    = Join-Path $ProjectRoot "src\push_client\main.py"
+$EntryPoint    = Join-Path $ProjectRoot "src\beaverpush\main.py"
 $OutputDir     = Join-Path $ProjectRoot "dist"
 $ProductName   = "BeaverPush"
 $IconPath      = Join-Path $ProjectRoot "assets\beaver_logo.ico"

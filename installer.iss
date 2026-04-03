@@ -60,6 +60,8 @@ Source: "{#MySourceDir}\dist\main.dist\*"; DestDir: "{app}"; Flags: ignoreversio
 Source: "{#MySourceDir}\ffmpeg\ffmpeg.exe"; DestDir: "{app}\ffmpeg"; Flags: ignoreversion
 Source: "{#MySourceDir}\ffmpeg\ffplay.exe"; DestDir: "{app}\ffmpeg"; Flags: ignoreversion
 Source: "{#MySourceDir}\ffmpeg\ffprobe.exe"; DestDir: "{app}\ffmpeg"; Flags: ignoreversion
+; FFmpeg 共享库（shared build 所需的动态链接库）
+Source: "{#MySourceDir}\ffmpeg\*.dll"; DestDir: "{app}\ffmpeg"; Flags: ignoreversion
 ; NOTE: Don't use "Flags: ignoreversion" on any shared system files
 
 [Icons]

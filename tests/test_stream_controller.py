@@ -6,9 +6,9 @@
 from unittest import mock
 import pytest
 
-from push_client.controllers.stream_controller import StreamController
-from push_client.models.stream_model import StreamState
-from push_client.models.config import StreamConfig
+from beaverpush.controllers.stream_controller import StreamController
+from beaverpush.models.stream_model import StreamState
+from beaverpush.models.config import StreamConfig
 
 
 def _make_mock_card():
@@ -47,11 +47,11 @@ class TestStreamControllerUrlConstruction:
         ctrl._video_codec = "libx264"
 
         with mock.patch(
-            "push_client.controllers.stream_controller.build_ffmpeg_command"
+            "beaverpush.controllers.stream_controller.build_ffmpeg_command"
         ) as mock_build, mock.patch(
-            "push_client.controllers.stream_controller.FFmpegWorker"
+            "beaverpush.controllers.stream_controller.FFmpegWorker"
         ), mock.patch(
-            "push_client.controllers.stream_controller.probe_video_info",
+            "beaverpush.controllers.stream_controller.probe_video_info",
             return_value={},
         ):
             mock_build.return_value = ["ffmpeg", "-i", "test"]
@@ -124,11 +124,11 @@ class TestStreamControllerSourceDefaults:
         ctrl._video_codec = "自动"  # 空/自动
 
         with mock.patch(
-            "push_client.controllers.stream_controller.build_ffmpeg_command"
+            "beaverpush.controllers.stream_controller.build_ffmpeg_command"
         ) as mock_build, mock.patch(
-            "push_client.controllers.stream_controller.FFmpegWorker"
+            "beaverpush.controllers.stream_controller.FFmpegWorker"
         ), mock.patch(
-            "push_client.controllers.stream_controller.get_screen_refresh_rate",
+            "beaverpush.controllers.stream_controller.get_screen_refresh_rate",
             return_value=60,
         ):
             mock_build.return_value = ["ffmpeg"]
@@ -155,11 +155,11 @@ class TestStreamControllerSourceDefaults:
         ctrl._video_codec = "自动"
 
         with mock.patch(
-            "push_client.controllers.stream_controller.build_ffmpeg_command"
+            "beaverpush.controllers.stream_controller.build_ffmpeg_command"
         ) as mock_build, mock.patch(
-            "push_client.controllers.stream_controller.FFmpegWorker"
+            "beaverpush.controllers.stream_controller.FFmpegWorker"
         ), mock.patch(
-            "push_client.controllers.stream_controller.probe_video_info",
+            "beaverpush.controllers.stream_controller.probe_video_info",
             return_value={"width": 1920, "height": 1080, "codec": "h264", "framerate": "30/1"},
         ):
             mock_build.return_value = ["ffmpeg"]
@@ -186,9 +186,9 @@ class TestStreamControllerSourceDefaults:
         ctrl._video_codec = "自动"
 
         with mock.patch(
-            "push_client.controllers.stream_controller.build_ffmpeg_command"
+            "beaverpush.controllers.stream_controller.build_ffmpeg_command"
         ) as mock_build, mock.patch(
-            "push_client.controllers.stream_controller.FFmpegWorker"
+            "beaverpush.controllers.stream_controller.FFmpegWorker"
         ):
             mock_build.return_value = ["ffmpeg"]
             ctrl.start_stream()
@@ -210,9 +210,9 @@ class TestStreamControllerSourceDefaults:
         ctrl._video_codec = "自动"
 
         with mock.patch(
-            "push_client.controllers.stream_controller.build_ffmpeg_command"
+            "beaverpush.controllers.stream_controller.build_ffmpeg_command"
         ) as mock_build, mock.patch(
-            "push_client.controllers.stream_controller.FFmpegWorker"
+            "beaverpush.controllers.stream_controller.FFmpegWorker"
         ):
             mock_build.return_value = ["ffmpeg"]
             ctrl.start_stream()
@@ -238,11 +238,11 @@ class TestStreamControllerSourceDefaults:
         ctrl._framerate = "24"
 
         with mock.patch(
-            "push_client.controllers.stream_controller.build_ffmpeg_command"
+            "beaverpush.controllers.stream_controller.build_ffmpeg_command"
         ) as mock_build, mock.patch(
-            "push_client.controllers.stream_controller.FFmpegWorker"
+            "beaverpush.controllers.stream_controller.FFmpegWorker"
         ), mock.patch(
-            "push_client.controllers.stream_controller.get_screen_refresh_rate",
+            "beaverpush.controllers.stream_controller.get_screen_refresh_rate",
             return_value=60,
         ):
             mock_build.return_value = ["ffmpeg"]
@@ -471,11 +471,11 @@ class TestPreviewToggle:
         ctrl._video_codec = "libx264"
 
         with mock.patch(
-            "push_client.controllers.stream_controller.build_ffmpeg_command"
+            "beaverpush.controllers.stream_controller.build_ffmpeg_command"
         ) as mock_build, mock.patch(
-            "push_client.controllers.stream_controller.FFmpegWorker"
+            "beaverpush.controllers.stream_controller.FFmpegWorker"
         ), mock.patch(
-            "push_client.controllers.stream_controller.probe_video_info",
+            "beaverpush.controllers.stream_controller.probe_video_info",
             return_value={},
         ):
             mock_build.return_value = ["ffmpeg", "-i", "test"]

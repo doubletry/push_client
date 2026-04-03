@@ -27,12 +27,12 @@ import sys
 from PySide6.QtGui import QFont, QIcon
 from PySide6.QtWidgets import QApplication
 
-from push_client import APP_NAME, APP_ICON_PATH
-from push_client.views.theme import Theme
-from push_client.views.main_window import MainWindow
-from push_client.controllers.app_controller import AppController
-from push_client.services.log_service import setup_logging, logger
-from push_client.services.single_instance import SingleInstanceGuard
+from beaverpush import APP_NAME, APP_ICON_PATH
+from beaverpush.views.theme import Theme
+from beaverpush.views.main_window import MainWindow
+from beaverpush.controllers.app_controller import AppController
+from beaverpush.services.log_service import setup_logging, logger
+from beaverpush.services.single_instance import SingleInstanceGuard
 
 
 def main():

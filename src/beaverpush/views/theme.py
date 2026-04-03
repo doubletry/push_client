@@ -7,7 +7,7 @@ Catppuccin Mocha 深色主题
 
 使用方式::
 
-    from push_client.views.theme import Theme
+    from beaverpush.views.theme import Theme
     label.setStyleSheet(f"color: {Theme.TEXT};")
     app.setStyleSheet(Theme.global_stylesheet())
 """
