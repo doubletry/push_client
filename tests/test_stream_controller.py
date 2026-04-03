@@ -424,6 +424,7 @@ class TestStreamControllerState:
             client_id_getter=lambda: "",
         )
         assert ctrl._state == StreamState.IDLE
+        assert ctrl._bitrate == "4M"
         assert not ctrl.is_streaming
 
     def test_initial_source_type_from_card(self):

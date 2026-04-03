@@ -128,14 +128,14 @@ class MainWindow(QMainWindow):
         toolbar.addWidget(QLabel("RTSP 服务器:"))
 
         self._server_input = QLineEdit()
-        self._server_input.setPlaceholderText("如 rtsp://192.168.1.100:8554")
+        self._server_input.setPlaceholderText("rtsp://192.168.1.100:8554")
         self._server_input.textChanged.connect(self.server_changed.emit)
         toolbar.addWidget(self._server_input, 1)
 
         toolbar.addWidget(QLabel("客户端 ID:"))
 
         self._client_id_input = QLineEdit()
-        self._client_id_input.setPlaceholderText("如 client01")
+        self._client_id_input.setPlaceholderText("client01")
         self._client_id_input.setFixedWidth(160)
         self._client_id_input.textChanged.connect(self.client_id_changed.emit)
         toolbar.addWidget(self._client_id_input)

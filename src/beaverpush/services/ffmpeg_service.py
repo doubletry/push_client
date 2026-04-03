@@ -42,8 +42,8 @@ from .log_service import logger
 
 # Windows-only subprocess flag; on Unix the attribute does not exist and falls back to 0.
 CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
-# RTSP 套接字超时，单位微秒（10 秒）。
-RTSP_SOCKET_TIMEOUT_US = "10000000"
+# RTSP 输入超时，单位微秒（10 秒）。
+RTSP_TIMEOUT_US = "10000000"
 DEFAULT_STARTUP_TIMEOUT_SECONDS = 8.0
 RTSP_STARTUP_TIMEOUT_SECONDS = 12.0
 READY_LINE_KEYWORDS = (
@@ -475,7 +475,7 @@ def build_ffmpeg_command(
     elif source_type == "rtsp":
         cmd += [
             "-rtsp_transport", "tcp",
-            "-stimeout", RTSP_SOCKET_TIMEOUT_US,
+            "-timeout", RTSP_TIMEOUT_US,
             "-i", source_path,
         ]
 
