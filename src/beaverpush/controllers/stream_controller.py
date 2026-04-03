@@ -217,7 +217,6 @@ class StreamController(QObject):
                 codec = "libx264"
             if self._source_path.startswith("offset:"):
                 parts = self._source_path.split(":", 1)[1].split(",")
-                # rawvideo 管道模式需要完整的 offset:x,y,w,h 信息后才能推算屏幕刷新率
                 if len(parts) == 4 and not framerate:
                     framerate = str(get_screen_refresh_rate(int(parts[0]), int(parts[1])))
         elif self._source_type == "window":
