@@ -16,8 +16,6 @@
 
 from __future__ import annotations
 
-import subprocess
-
 from PySide6.QtCore import QObject, QTimer, Qt
 from PySide6.QtWidgets import QApplication, QSystemTrayIcon, QMenu
 from PySide6.QtGui import QAction, QCloseEvent, QIcon, QPixmap
@@ -29,7 +27,8 @@ from ..models.config import (
 from ..services.device_service import (
     list_cameras, list_screens, list_windows,
 )
-from ..services.ffmpeg_path import get_ffmpeg
+from ..services.ffmpeg_service import check_rtsp_server_reachable
+from ..services.connectivity_service import ConnectivityCheckWorker
 from ..views.main_window import MainWindow
 from ..views.stream_card import StreamCardView
 from .stream_controller import StreamController
@@ -56,13 +55,18 @@ class AppController(QObject):
         self._rtsp_server = self._config.rtsp_server
         self._server_locked = self._config.server_locked
         self._client_id = self._config.client_id
+        self._server_reconnect_interval = self._config.server_reconnect_interval
+        self._server_reconnect_max_attempts = self._config.server_reconnect_max_attempts
         self._controllers: list[StreamController] = []
         self._tray: QSystemTrayIcon | None = None
+        self._test_worker: ConnectivityCheckWorker | None = None
 
         # 同步初始状态到 View
         self._window.set_server(self._rtsp_server)
         self._window.set_server_locked(self._server_locked)
         self._window.set_client_id(self._client_id)
+        self._window.set_server_reconnect_interval(self._server_reconnect_interval)
+        self._window.set_server_reconnect_max_attempts(self._server_reconnect_max_attempts)
 
         # 连接 View 信号 → Controller
         self._connect_signals()
@@ -80,6 +84,8 @@ class AppController(QObject):
         """将 MainWindow 的信号连接到对应的处理方法。"""
         w = self._window
         w.server_changed.connect(self._on_server_changed)
+        w.server_reconnect_interval_changed.connect(self._on_server_reconnect_interval_changed)
+        w.server_reconnect_max_attempts_changed.connect(self._on_server_reconnect_max_attempts_changed)
         w.test_clicked.connect(self._on_test)
         w.add_stream_clicked.connect(self.add_stream)
         w.save_config_clicked.connect(self.save_config)
@@ -103,6 +109,12 @@ class AppController(QObject):
     def _on_client_id_changed(self, cid: str):
         """用户修改客户端 ID。"""
         self._client_id = cid
+
+    def _on_server_reconnect_interval_changed(self, value: str):
+        self._server_reconnect_interval = self._parse_positive_int(value, 5)
+
+    def _on_server_reconnect_max_attempts_changed(self, value: str):
+        self._server_reconnect_max_attempts = self._parse_non_negative_int(value, 0)
 
     def _on_start_all(self):
         """全部开始推流。"""
@@ -134,44 +146,23 @@ class AppController(QObject):
 
         self._window.set_test_button_testing(True)
         self._window.set_status("正在测试连接...")
+        worker = ConnectivityCheckWorker(
+            [("正在检测 RTSP 服务器...", lambda: check_rtsp_server_reachable(self._rtsp_server), "")],
+            self,
+        )
+        self._test_worker = worker
+        worker.stage_changed.connect(lambda stage: self._window.set_status(stage))
+        worker.check_completed.connect(self._on_test_completed)
+        worker.finished.connect(worker.deleteLater)
+        worker.start()
 
-        try:
-            result = subprocess.run(
-                [
-                    get_ffmpeg(), "-y",
-                    "-f", "lavfi", "-i",
-                    "testsrc=duration=1:size=320x240:rate=1",
-                    "-c:v", "libx264", "-preset", "ultrafast",
-                    "-t", "1",
-                    "-f", "rtsp", "-rtsp_transport", "tcp",
-                    f"{self._rtsp_server.rstrip('/')}/__connection_test__",
-                ],
-                capture_output=True, text=True, timeout=10,
-                creationflags=subprocess.CREATE_NO_WINDOW,
-            )
-            stderr = result.stderr.lower()
-            if result.returncode == 0:
-                self._window.show_test_result(True, "连接成功！RTSP 服务器可达。")
-            elif "connection refused" in stderr:
-                self._window.show_test_result(False, "连接被拒绝，请检查服务器是否启动。")
-            elif "no route" in stderr or "unreachable" in stderr:
-                self._window.show_test_result(False, "主机不可达，请检查网络和地址。")
-            elif "timeout" in stderr:
-                self._window.show_test_result(False, "连接超时。")
-            else:
-                self._window.show_test_result(True, "服务器已响应，连接正常。")
-        except subprocess.TimeoutExpired:
-            logger.warning("RTSP 连接测试超时: {}", self._rtsp_server)
-            self._window.show_test_result(False, "连接超时，请检查地址和网络。")
-        except FileNotFoundError:
-            logger.error("ffmpeg 可执行文件未找到")
-            self._window.show_test_result(False, "未找到 ffmpeg，请确认已安装并添加到 PATH。")
-        except Exception as e:
-            logger.exception("RTSP 连接测试异常")
-            self._window.show_test_result(False, f"测试失败: {e}")
-        finally:
-            self._window.set_test_button_testing(False)
-            self._window.set_status("连接测试完成")
+    def _on_test_completed(self, ok: bool, message: str):
+        if self.sender() is not self._test_worker:
+            return
+        self._test_worker = None
+        self._window.show_test_result(ok, message)
+        self._window.set_test_button_testing(False)
+        self._window.set_status("连接测试完成")
 
     # ==================================================================
     #  推流通道管理
@@ -206,6 +197,9 @@ class AppController(QObject):
             channel_index=channel_index,
             rtsp_server_getter=lambda: self._rtsp_server,
             client_id_getter=lambda: self._client_id,
+            server_reconnect_interval_getter=lambda: self._server_reconnect_interval,
+            server_reconnect_max_attempts_getter=lambda: self._server_reconnect_max_attempts,
+            status_reporter=self._window.set_status,
             parent=self,
         )
         self._controllers.append(ctrl)
@@ -301,6 +295,8 @@ class AppController(QObject):
             rtsp_server=self._rtsp_server,
             server_locked=self._server_locked,
             client_id=self._client_id,
+            server_reconnect_interval=self._server_reconnect_interval,
+            server_reconnect_max_attempts=self._server_reconnect_max_attempts,
             streams=[],
         )
         for ctrl in self._controllers:
@@ -422,3 +418,19 @@ class AppController(QObject):
         if self._tray:
             self._tray.hide()
         self._app.quit()
+
+    @staticmethod
+    def _parse_positive_int(value: str, default: int) -> int:
+        try:
+            parsed = int(value)
+        except (TypeError, ValueError):
+            return default
+        return parsed if parsed > 0 else default
+
+    @staticmethod
+    def _parse_non_negative_int(value: str, default: int) -> int:
+        try:
+            parsed = int(value)
+        except (TypeError, ValueError):
+            return default
+        return parsed if parsed >= 0 else default

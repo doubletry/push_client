@@ -60,6 +60,8 @@ class StreamConfig:
     framerate: str = ""
     bitrate: str = ""
     auto_start: bool = False
+    source_reconnect_interval: int = 5
+    source_reconnect_max_attempts: int = 0
 
 
 @dataclass
@@ -76,6 +78,8 @@ class AppConfig:
     rtsp_server: str = ""
     server_locked: bool = False
     client_id: str = ""
+    server_reconnect_interval: int = 5
+    server_reconnect_max_attempts: int = 0
     streams: list[dict] = field(default_factory=list)
 
     def add_stream(self, cfg: StreamConfig):
@@ -104,6 +108,14 @@ def load_config() -> AppConfig:
                 rtsp_server=data.get("rtsp_server", ""),
                 server_locked=data.get("server_locked", False),
                 client_id=data.get("client_id", ""),
+                server_reconnect_interval=int(data.get("server_reconnect_interval", 5) or 5),
+                server_reconnect_max_attempts=int(
+                    data.get(
+                        # 兼容旧字段；由于缺少单位上下文，旧值会按原数字迁移到新字段。
+                        "server_reconnect_max_attempts",
+                        data.get("server_reconnect_duration", 0),
+                    ) or 0
+                ),
                 streams=data.get("streams", []),
             )
         except Exception:

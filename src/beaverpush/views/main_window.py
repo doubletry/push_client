@@ -45,6 +45,8 @@ class MainWindow(QMainWindow):
     add_stream_clicked = Signal()
     save_config_clicked = Signal()
     server_changed     = Signal(str)
+    server_reconnect_interval_changed = Signal(str)
+    server_reconnect_max_attempts_changed = Signal(str)
     # 客户端 ID 变更信号
     client_id_changed  = Signal(str)
     # 全部开始/停止推流信号
@@ -112,6 +114,7 @@ class MainWindow(QMainWindow):
 
         # ── 第 1 行：RTSP 服务器 + 客户端 ID + 锁定 ──
         layout.addLayout(self._build_toolbar())
+        layout.addLayout(self._build_reconnect_bar())
         # ── 第 2 行：功能按钮 ──
         layout.addLayout(self._build_action_bar())
 
@@ -125,14 +128,14 @@ class MainWindow(QMainWindow):
         toolbar.addWidget(QLabel("RTSP 服务器:"))
 
         self._server_input = QLineEdit()
-        self._server_input.setPlaceholderText("如 rtsp://192.168.1.100:8554")
+        self._server_input.setPlaceholderText("rtsp://192.168.1.100:8554")
         self._server_input.textChanged.connect(self.server_changed.emit)
         toolbar.addWidget(self._server_input, 1)
 
         toolbar.addWidget(QLabel("客户端 ID:"))
 
         self._client_id_input = QLineEdit()
-        self._client_id_input.setPlaceholderText("如 client01")
+        self._client_id_input.setPlaceholderText("client01")
         self._client_id_input.setFixedWidth(160)
         self._client_id_input.textChanged.connect(self.client_id_changed.emit)
         toolbar.addWidget(self._client_id_input)
@@ -258,6 +261,33 @@ class MainWindow(QMainWindow):
 
         return bar
 
+    def _build_reconnect_bar(self) -> QHBoxLayout:
+        """构建服务器重连参数行。"""
+        bar = QHBoxLayout()
+        bar.setSpacing(10)
+        bar.addWidget(QLabel("服务器重连间隔:"))
+
+        self._server_reconnect_interval_input = QLineEdit()
+        self._server_reconnect_interval_input.setPlaceholderText("5")
+        self._server_reconnect_interval_input.setFixedWidth(60)
+        self._server_reconnect_interval_input.textChanged.connect(
+            self.server_reconnect_interval_changed.emit
+        )
+        bar.addWidget(self._server_reconnect_interval_input)
+        bar.addWidget(QLabel("秒"))
+
+        bar.addWidget(QLabel("最大尝试:"))
+        self._server_reconnect_max_attempts_input = QLineEdit()
+        self._server_reconnect_max_attempts_input.setPlaceholderText("0=无限")
+        self._server_reconnect_max_attempts_input.setFixedWidth(60)
+        self._server_reconnect_max_attempts_input.setToolTip("设置为 0 表示无限重连")
+        self._server_reconnect_max_attempts_input.textChanged.connect(
+            self.server_reconnect_max_attempts_changed.emit
+        )
+        bar.addWidget(self._server_reconnect_max_attempts_input)
+        bar.addStretch()
+        return bar
+
     def _toggle_server_lock(self):
         """切换 RTSP 服务器地址和客户端 ID 的锁定/解锁状态。"""
         self.set_server_locked(not self._server_input.isReadOnly())
@@ -291,6 +321,8 @@ class MainWindow(QMainWindow):
         """
         self._server_input.setReadOnly(locked)
         self._client_id_input.setReadOnly(locked)
+        self._server_reconnect_interval_input.setReadOnly(locked)
+        self._server_reconnect_max_attempts_input.setReadOnly(locked)
         if locked:
             self._lock_btn.setText("🔒")
             self._lock_btn.setToolTip("点击解锁 RTSP 地址和客户端 ID")
@@ -360,6 +392,22 @@ class MainWindow(QMainWindow):
         self._server_input.blockSignals(True)
         self._server_input.setText(url)
         self._server_input.blockSignals(False)
+
+    def get_server_reconnect_interval(self) -> str:
+        return self._server_reconnect_interval_input.text()
+
+    def set_server_reconnect_interval(self, interval: int | str):
+        self._server_reconnect_interval_input.blockSignals(True)
+        self._server_reconnect_interval_input.setText(str(interval))
+        self._server_reconnect_interval_input.blockSignals(False)
+
+    def get_server_reconnect_max_attempts(self) -> str:
+        return self._server_reconnect_max_attempts_input.text()
+
+    def set_server_reconnect_max_attempts(self, attempts: int | str):
+        self._server_reconnect_max_attempts_input.blockSignals(True)
+        self._server_reconnect_max_attempts_input.setText(str(attempts))
+        self._server_reconnect_max_attempts_input.blockSignals(False)
 
     def set_status(self, message: str):
         """更新底部状态栏文本。"""

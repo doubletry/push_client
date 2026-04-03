@@ -1,10 +1,12 @@
 """ffmpeg_service 模块单元测试"""
 
 import subprocess
+import time
 from unittest import mock
 
 from beaverpush.services.ffmpeg_service import (
     build_ffmpeg_command, friendly_error, _make_even, FFmpegWorker,
+    check_rtsp_server_reachable, RTSP_TIMEOUT_US,
 )
 
 
@@ -193,6 +195,9 @@ class TestBuildFfmpegCommandRtsp:
         )
         assert "-rtsp_transport" in cmd
         assert "tcp" in cmd
+        assert "-timeout" in cmd
+        timeout_idx = cmd.index("-timeout")
+        assert cmd[timeout_idx + 1] == RTSP_TIMEOUT_US
 
 
 class TestBuildFfmpegCommandCamera:
@@ -349,6 +354,96 @@ class TestFFmpegWorkerInit:
             worker._preview_monitor_thread.join(timeout=2)
             mock_signal.emit.assert_not_called()
 
+    def test_status_turns_streaming_after_progress(self):
+        worker = FFmpegWorker()
+        worker.set_command(["ffmpeg", "-i", "test"])
+        statuses = []
+        progress = []
+        worker.status_changed.connect(statuses.append)
+        worker.progress_info.connect(progress.append)
+
+        mock_proc = mock.MagicMock()
+        mock_proc.returncode = 0
+        mock_proc.wait.return_value = 0
+        mock_proc.stderr.readline.side_effect = [
+            b"frame=1 fps=25.0 size=1kB time=00:00:01 speed=1x\n",
+            b"",
+        ]
+        mock_proc.stderr.read.return_value = b""
+
+        with mock.patch(
+            "beaverpush.services.ffmpeg_service.subprocess.Popen",
+            return_value=mock_proc,
+        ):
+            worker.run()
+
+        assert statuses[:2] == ["正在启动推流...", "等待数据..."]
+        assert statuses[2] == "推流中"
+        assert progress
+
+    def test_status_turns_streaming_after_ready_line(self):
+        worker = FFmpegWorker()
+        worker.set_command(["ffmpeg", "-i", "test"])
+        statuses = []
+        worker.status_changed.connect(statuses.append)
+
+        mock_proc = mock.MagicMock()
+        mock_proc.returncode = 0
+        mock_proc.wait.return_value = 0
+        mock_proc.stderr.readline.side_effect = [
+            b"Press [q] to stop, [?] for help\n",
+            b"",
+        ]
+        mock_proc.stderr.read.return_value = b""
+
+        with mock.patch(
+            "beaverpush.services.ffmpeg_service.subprocess.Popen",
+            return_value=mock_proc,
+        ):
+            worker.run()
+
+        assert statuses[:3] == ["正在启动推流...", "等待数据...", "推流中"]
+
+    def test_rtsp_startup_timeout_terminates_process(self):
+        worker = FFmpegWorker()
+        worker.set_source_type("rtsp")
+        worker.set_command(["ffmpeg", "-i", "test"])
+        worker._startup_timeout_seconds = 0.01
+        statuses = []
+        worker.status_changed.connect(statuses.append)
+
+        mock_proc = mock.MagicMock()
+        mock_proc.returncode = 1
+        mock_proc.poll.return_value = None
+        mock_proc.wait.return_value = 1
+
+        def delayed_readline():
+            time.sleep(0.2)
+            return b""
+
+        mock_proc.stderr.readline.side_effect = delayed_readline
+        mock_proc.stderr.read.return_value = b""
+
+        with mock.patch(
+            "beaverpush.services.ffmpeg_service.subprocess.Popen",
+            return_value=mock_proc,
+        ):
+            worker.run()
+
+        mock_proc.terminate.assert_called()
+        assert "推流中" not in statuses
+
+    def test_stop_does_not_block_waiting_for_process_exit(self):
+        worker = FFmpegWorker()
+        mock_proc = mock.MagicMock()
+        mock_proc.poll.return_value = None
+        worker._process = mock_proc
+
+        worker.stop()
+
+        mock_proc.terminate.assert_called_once()
+        mock_proc.wait.assert_not_called()
+
 
 class TestFriendlyError:
     def test_connection_refused(self):
@@ -362,3 +457,30 @@ class TestFriendlyError:
     def test_unknown_error_passthrough(self):
         result = friendly_error("some random message")
         assert result == "some random message"
+
+
+class TestCheckRtspServerReachable:
+    def test_success(self):
+        completed = subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="")
+        with mock.patch(
+            "beaverpush.services.ffmpeg_service.subprocess.run",
+            return_value=completed,
+        ):
+            ok, message = check_rtsp_server_reachable("rtsp://localhost:8554")
+        assert ok is True
+        assert "连接成功" in message
+
+    def test_refused(self):
+        completed = subprocess.CompletedProcess(
+            args=[],
+            returncode=1,
+            stdout="",
+            stderr="Connection refused",
+        )
+        with mock.patch(
+            "beaverpush.services.ffmpeg_service.subprocess.run",
+            return_value=completed,
+        ):
+            ok, message = check_rtsp_server_reachable("rtsp://localhost:8554")
+        assert ok is False
+        assert "连接被拒绝" in message
