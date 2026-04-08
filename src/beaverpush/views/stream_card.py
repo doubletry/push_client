@@ -298,6 +298,8 @@ class StreamCardView(QFrame):
         reconnect_layout.addWidget(self._source_reconnect_max_attempts_input)
 
         row.addWidget(self._reconnect_container)
+        # 默认隐藏重连配置（仅 RTSP 源时显示）
+        self._reconnect_container.setVisible(False)
 
         row.addStretch()
         return panel

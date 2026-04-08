@@ -11,6 +11,7 @@
     - :func:`list_windows`        — 通过 Win32 EnumWindows 列出可见顶层窗口
     - :func:`probe_video_info`    — 通过 ffprobe 探测视频分辨率/编码/帧率
     - :func:`check_rtsp_reachable` — 通过 ffprobe 检测 RTSP 地址是否可达
+    - :func:`get_motherboard_uuid` — 获取主板 UUID 作为默认客户端 ID
 
 .. note::
     :func:`list_windows` 仅支持 Windows 平台（依赖 ctypes.windll）。
