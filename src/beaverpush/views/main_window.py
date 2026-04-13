@@ -20,7 +20,7 @@ from PySide6.QtGui import QFont, QIcon, QRegularExpressionValidator
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QLineEdit, QPushButton, QScrollArea,
-    QMessageBox, QFrame, QDialog, QTextBrowser,
+    QMessageBox, QFrame, QDialog, QTextBrowser, QSizePolicy,
 )
 
 from .stream_card import StreamCardView
@@ -116,8 +116,8 @@ class MainWindow(QMainWindow):
 
         # ── 第 1 行：RTSP 服务器 + 锁定 ──
         layout.addLayout(self._build_toolbar())
-        # ── 第 2 行：用户名 + 设备名 + 授权码 ──
-        layout.addLayout(self._build_auth_bar())
+        # ── 第 2 行：账号 + 客户端 ID + 授权码 ──
+        layout.addWidget(self._build_auth_bar())
         layout.addLayout(self._build_reconnect_bar())
         # ── 第 3 行：功能按钮 ──
         layout.addLayout(self._build_action_bar())
@@ -153,10 +153,27 @@ class MainWindow(QMainWindow):
 
         return toolbar
 
-    def _build_auth_bar(self) -> QHBoxLayout:
-        """构建认证参数行：用户名 + 设备名 + 授权码。"""
-        bar = QHBoxLayout()
-        bar.setSpacing(10)
+    def _build_auth_bar(self) -> QFrame:
+        """构建认证参数区域：账号 + 客户端 ID + 授权码。"""
+        container = QFrame()
+        container.setObjectName("authBar")
+        container.setStyleSheet(f"""
+            QFrame#authFieldGroup {{
+                background-color: {Theme.CRUST};
+                border: 1px solid {Theme.SURFACE0};
+                border-radius: {Theme.RADIUS_NORMAL}px;
+            }}
+            QLabel#authFieldTitle {{
+                color: {Theme.SUBTEXT1};
+                font-weight: bold;
+            }}
+            QLabel#authFieldHint {{
+                color: {Theme.OVERLAY1};
+            }}
+        """)
+        bar = QHBoxLayout(container)
+        bar.setContentsMargins(0, 0, 0, 0)
+        bar.setSpacing(12)
 
         # 只允许 ASCII 字母、数字以及 _ - 符号（v2 用户名规则）
         _name_validator = QRegularExpressionValidator(
@@ -167,47 +184,89 @@ class MainWindow(QMainWindow):
             QRegularExpression(r"[A-Za-z0-9._\-]*")
         )
 
-        bar.addWidget(QLabel("用户名:"))
         self._username_input = QLineEdit()
         self._username_input.setPlaceholderText("your_username")
-        self._username_input.setFixedWidth(130)
+        self._username_input.setMinimumWidth(180)
         self._username_input.setValidator(_name_validator)
+        self._username_input.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
+        )
         self._username_input.textChanged.connect(self.username_changed.emit)
-        bar.addWidget(self._username_input)
+        bar.addWidget(
+            self._build_auth_field_group(
+                "账号（用户名）",
+                "参与 RTSP 路径拼接",
+                self._username_input,
+            ),
+            1,
+        )
 
-        bar.addWidget(QLabel("设备名:"))
         self._machine_name_input = QLineEdit()
         self._machine_name_input.setPlaceholderText("pc1")
-        self._machine_name_input.setFixedWidth(130)
+        self._machine_name_input.setMinimumWidth(180)
         self._machine_name_input.setValidator(_machine_validator)
+        self._machine_name_input.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
+        )
         self._machine_name_input.textChanged.connect(self.machine_name_changed.emit)
-        bar.addWidget(self._machine_name_input)
+        bar.addWidget(
+            self._build_auth_field_group(
+                "客户端 ID（设备名）",
+                "建议使用稳定的设备标识",
+                self._machine_name_input,
+            ),
+            1,
+        )
 
-        bar.addWidget(QLabel("授权码:"))
         self._auth_secret_input = QLineEdit()
-        self._auth_secret_input.setPlaceholderText("API Key 或密码")
+        self._auth_secret_input.setPlaceholderText("请输入授权码 / API Key")
         self._auth_secret_input.setEchoMode(QLineEdit.EchoMode.Password)
-        self._auth_secret_input.setFixedWidth(200)
+        self._auth_secret_input.setMinimumWidth(220)
+        self._auth_secret_input.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
+        )
+        self._auth_secret_input.setInputMethodHints(
+            Qt.InputMethodHint.ImhSensitiveData
+            | Qt.InputMethodHint.ImhNoPredictiveText
+            | Qt.InputMethodHint.ImhNoAutoUppercase
+        )
         self._auth_secret_input.textChanged.connect(self.auth_secret_changed.emit)
-        bar.addWidget(self._auth_secret_input)
+        bar.addWidget(
+            self._build_auth_field_group(
+                "授权码",
+                "输入时始终保持隐藏",
+                self._auth_secret_input,
+            ),
+            1,
+        )
 
-        # 显示/隐藏授权码
-        self._show_secret_btn = QPushButton("👁")
-        self._show_secret_btn.setFixedWidth(36)
-        self._show_secret_btn.setStyleSheet(f"""
-            QPushButton {{
-                background-color: {Theme.SURFACE1};
-                border: 1px solid {Theme.SURFACE2};
-                border-radius: {Theme.RADIUS_NORMAL}px;
-            }}
-            QPushButton:hover {{ background-color: {Theme.SURFACE2}; }}
-        """)
-        self._show_secret_btn.setToolTip("显示/隐藏授权码")
-        self._show_secret_btn.clicked.connect(self._toggle_secret_visibility)
-        bar.addWidget(self._show_secret_btn)
+        return container
 
-        bar.addStretch()
-        return bar
+    def _build_auth_field_group(
+        self,
+        title: str,
+        hint: str,
+        input_widget: QLineEdit,
+    ) -> QFrame:
+        """构建认证字段分组，统一输入区层次和间距。"""
+        group = QFrame()
+        group.setObjectName("authFieldGroup")
+
+        layout = QVBoxLayout(group)
+        layout.setContentsMargins(12, 10, 12, 10)
+        layout.setSpacing(6)
+
+        title_label = QLabel(title)
+        title_label.setObjectName("authFieldTitle")
+        layout.addWidget(title_label)
+
+        hint_label = QLabel(hint)
+        hint_label.setObjectName("authFieldHint")
+        layout.addWidget(hint_label)
+
+        input_widget.setMinimumHeight(34)
+        layout.addWidget(input_widget)
+        return group
 
     def _build_action_bar(self) -> QHBoxLayout:
         """构建功能按钮行：测试连接、添加通道、保存配置、全部开始/停止。"""
@@ -344,15 +403,6 @@ class MainWindow(QMainWindow):
     def _toggle_server_lock(self):
         """切换全局配置的锁定/解锁状态。"""
         self.set_server_locked(not self._server_input.isReadOnly())
-
-    def _toggle_secret_visibility(self):
-        """切换授权码输入框的显示/隐藏。"""
-        if self._auth_secret_input.echoMode() == QLineEdit.EchoMode.Password:
-            self._auth_secret_input.setEchoMode(QLineEdit.EchoMode.Normal)
-            self._show_secret_btn.setText("🙈")
-        else:
-            self._auth_secret_input.setEchoMode(QLineEdit.EchoMode.Password)
-            self._show_secret_btn.setText("👁")
 
     def _show_help(self):
         """加载 assets/help.txt 并显示帮助对话框。"""
