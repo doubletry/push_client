@@ -114,7 +114,9 @@ class TestStreamControllerUrlConstruction:
         ), mock.patch(
             "beaverpush.controllers.stream_controller.probe_video_info",
             return_value={},
-        ):
+        ), mock.patch(
+            "beaverpush.controllers.stream_controller.logger.info"
+        ) as mock_logger:
             mock_build.return_value = ["ffmpeg", "-i", "test"]
             ctrl.start_stream()
             # 验证 build_ffmpeg_command 被调用时的 rtsp_url 参数
@@ -123,6 +125,7 @@ class TestStreamControllerUrlConstruction:
             assert kwargs["rtsp_url"] == "rtsp://alice:AKsecret123@localhost:8554/alice/pc1/stream1"
             assert ctrl._rtsp_url == "rtsp://alice:***@localhost:8554/alice/pc1/stream1"
             assert ctrl._preview_rtsp_url == "rtsp://alice:AKsecret123@localhost:8554/alice/pc1/stream1"
+            assert "AKsecret123" not in str(mock_logger.call_args)
 
     def test_url_format_v2_normalizes_server_and_encodes_auth(self):
         card = _make_mock_card()
@@ -176,6 +179,7 @@ class TestStreamControllerUrlConstruction:
         card.show_error.assert_called_with("RTSP 服务器地址格式不正确，应为 rtsp://host[:port]")
         assert ctrl._state == StreamState.IDLE
         assert ctrl._worker is None
+        assert ctrl._preview_rtsp_url == ""
 
     def test_missing_username_shows_error(self):
         card = _make_mock_card()
@@ -843,7 +847,7 @@ class TestPreviewToggle:
         worker = mock.MagicMock()
         ctrl._worker = worker
         ctrl._state = StreamState.STREAMING
-        ctrl._rtsp_url = "rtsp://localhost:8554/c1/s1"
+        ctrl._preview_rtsp_url = "rtsp://localhost:8554/c1/s1"
         ctrl._preview = False
 
         ctrl.toggle_preview()

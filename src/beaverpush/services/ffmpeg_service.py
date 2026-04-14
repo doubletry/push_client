@@ -68,6 +68,7 @@ def normalize_rtsp_server(rtsp_server: str) -> str:
     if (
         parsed.scheme != "rtsp"
         or not parsed.hostname
+        # v2 所有权模型会自行拼接 /{username}/{machine}/{channel}，因此这里不接受额外基础路径。
         or parsed.path not in ("", "/")
         or parsed.params
         or parsed.query

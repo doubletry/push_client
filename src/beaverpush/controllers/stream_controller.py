@@ -106,6 +106,10 @@ class StreamController(QObject):
 
         self._connect_card_signals()
 
+    def _clear_rtsp_urls(self):
+        self._rtsp_url = ""
+        self._preview_rtsp_url = ""
+
     def _connect_card_signals(self):
         c = self._card
         c.source_type_changed.connect(self._on_source_type)
@@ -434,7 +438,9 @@ class StreamController(QObject):
             self._preview = False
             self._card.set_preview_active(False)
         else:
-            self._worker.start_preview_now(self._preview_rtsp_url or self._rtsp_url)
+            if not self._preview_rtsp_url:
+                return
+            self._worker.start_preview_now(self._preview_rtsp_url)
             self._preview = True
             self._card.set_preview_active(True)
 
@@ -459,8 +465,7 @@ class StreamController(QObject):
             self._set_state(StreamState.STOPPING)
             self._worker.stop()
         else:
-            self._rtsp_url = ""
-            self._preview_rtsp_url = ""
+            self._clear_rtsp_urls()
             self._set_state(StreamState.IDLE)
 
     def force_stop(self):
@@ -473,8 +478,7 @@ class StreamController(QObject):
             self._worker.stop()
             self._worker.wait(3000)
         self._worker = None
-        self._rtsp_url = ""
-        self._preview_rtsp_url = ""
+        self._clear_rtsp_urls()
         self._set_state(StreamState.IDLE)
 
     def _on_worker_status(self, status: str):
@@ -513,8 +517,7 @@ class StreamController(QObject):
         self._preview = False
         self._card.set_preview_active(False)
         self._worker = None
-        self._rtsp_url = ""
-        self._preview_rtsp_url = ""
+        self._clear_rtsp_urls()
         if self._reconnect_timer.isActive():
             self._set_state(StreamState.RECONNECTING)
             return
