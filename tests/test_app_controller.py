@@ -23,16 +23,14 @@ def empty_config(monkeypatch):
 
 
 @pytest.fixture
-def controller(empty_config):
-    original_detect = AppController._detect_and_apply_codecs
-    AppController._detect_and_apply_codecs = lambda self: None
+def controller(empty_config, monkeypatch):
+    monkeypatch.setattr(AppController, "_detect_and_apply_codecs", lambda self: None)
     app = QApplication.instance() or QApplication([])
     window = MainWindow()
     try:
         ctrl = AppController(window, app)
         yield ctrl, window, empty_config
     finally:
-        AppController._detect_and_apply_codecs = original_detect
         window.deleteLater()
         app.processEvents()
 
