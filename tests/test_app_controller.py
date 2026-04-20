@@ -1,0 +1,138 @@
+"""AppController 行为测试：序号刷新、上下排序、自动保存。"""
+
+from __future__ import annotations
+
+import pytest
+from PySide6.QtWidgets import QApplication
+
+from beaverpush.controllers import app_controller as app_ctrl_module
+from beaverpush.controllers.app_controller import AppController
+from beaverpush.models.config import AppConfig
+from beaverpush.views.main_window import MainWindow
+
+
+@pytest.fixture
+def empty_config(monkeypatch):
+    """避免读取磁盘上的真实配置；并拦截 save_config 写盘调用并计数。"""
+    monkeypatch.setattr(app_ctrl_module, "load_config", lambda: AppConfig())
+    saves: list[AppConfig] = []
+    monkeypatch.setattr(
+        app_ctrl_module, "save_config", lambda cfg: saves.append(cfg)
+    )
+    return saves
+
+
+@pytest.fixture
+def controller(empty_config):
+    app = QApplication.instance() or QApplication([])
+    window = MainWindow()
+    ctrl = AppController(window, app)
+    yield ctrl, window, empty_config
+    window.deleteLater()
+    app.processEvents()
+
+
+def test_add_stream_refreshes_positions_and_autosaves(controller):
+    ctrl, window, saves = controller
+    saves.clear()
+    a = ctrl.add_stream()
+    b = ctrl.add_stream()
+    c = ctrl.add_stream()
+    # 每次 add 触发一次自动保存
+    assert len(saves) == 3
+    # 序号徽标按位置刷新（与 channel_index 解耦）
+    assert a.card._position_badge.text() == "#1"
+    assert b.card._position_badge.text() == "#2"
+    assert c.card._position_badge.text() == "#3"
+    # 边界按钮：首张禁用上移，末张禁用下移
+    assert not a.card._move_up_btn.isEnabled()
+    assert a.card._move_down_btn.isEnabled()
+    assert b.card._move_up_btn.isEnabled()
+    assert b.card._move_down_btn.isEnabled()
+    assert c.card._move_up_btn.isEnabled()
+    assert not c.card._move_down_btn.isEnabled()
+
+
+def test_move_stream_swaps_controllers_and_autosaves(controller):
+    ctrl, window, saves = controller
+    a = ctrl.add_stream()
+    b = ctrl.add_stream()
+    c = ctrl.add_stream()
+    saves.clear()
+
+    # 通过点击卡片的下移按钮触发：a 下移 → 顺序变为 [b, a, c]
+    a.card._move_down_btn.click()
+    assert ctrl._controllers == [b, a, c]
+    assert window.get_cards() == [b.card, a.card, c.card]
+    # 序号同步刷新
+    assert b.card._position_badge.text() == "#1"
+    assert a.card._position_badge.text() == "#2"
+    assert c.card._position_badge.text() == "#3"
+    # 触发了一次自动保存
+    assert len(saves) == 1
+
+    # 再点击 c 的上移：顺序变为 [b, c, a]
+    c.card._move_up_btn.click()
+    assert ctrl._controllers == [b, c, a]
+    assert len(saves) == 2
+
+
+def test_remove_stream_autosaves_and_refreshes_positions(controller):
+    ctrl, window, saves = controller
+    a = ctrl.add_stream()
+    b = ctrl.add_stream()
+    c = ctrl.add_stream()
+    saves.clear()
+
+    ctrl._remove_stream(b)
+    assert ctrl._controllers == [a, c]
+    assert a.card._position_badge.text() == "#1"
+    assert c.card._position_badge.text() == "#2"
+    # 移除后的边界按钮
+    assert not a.card._move_up_btn.isEnabled()
+    assert not c.card._move_down_btn.isEnabled()
+    assert len(saves) == 1
+
+
+def test_clicking_start_button_triggers_autosave(controller, monkeypatch):
+    ctrl, window, saves = controller
+    a = ctrl.add_stream()
+    saves.clear()
+    # 阻断真正的推流逻辑，仅验证 start_clicked 触发了自动保存
+    monkeypatch.setattr(a, "start_stream", lambda: None)
+    a.card._start_btn.click()
+    assert len(saves) == 1
+
+
+def test_loading_config_skips_autosave(monkeypatch):
+    """加载阶段不应触发自动保存（即使添加了通道）。"""
+    cfg = AppConfig(streams=[{"name": "stream1", "source_type": "video"}])
+    monkeypatch.setattr(app_ctrl_module, "load_config", lambda: cfg)
+    saves: list[AppConfig] = []
+    monkeypatch.setattr(
+        app_ctrl_module, "save_config", lambda c: saves.append(c)
+    )
+
+    app = QApplication.instance() or QApplication([])
+    window = MainWindow()
+    try:
+        AppController(window, app)
+        # 加载期间 _loading_config=True，所有 _autosave 调用应跳过
+        assert saves == []
+    finally:
+        window.deleteLater()
+        app.processEvents()
+
+
+def test_move_blocked_when_streaming(controller):
+    ctrl, window, saves = controller
+    a = ctrl.add_stream()
+    b = ctrl.add_stream()
+    saves.clear()
+    # 模拟 a 正在推流（直接设置状态，避免触发真正的 ffmpeg 启动）
+    from beaverpush.models.stream_model import StreamState
+    a._state = StreamState.STREAMING
+    # 直接调用 _move_stream（按钮虽已禁用，但要保证后端拦截）
+    ctrl._move_stream(a, +1)
+    assert ctrl._controllers == [a, b]
+    assert saves == []

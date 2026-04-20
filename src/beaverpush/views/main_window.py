@@ -577,6 +577,31 @@ class MainWindow(QMainWindow):
             card.deleteLater()
             self._empty_label.setVisible(len(self._cards) == 0)
 
+    def move_card(self, card: StreamCardView, delta: int) -> bool:
+        """在卡片列表与布局中将指定卡片移动 ``delta`` 个位置。
+
+        Args:
+            card:  目标卡片。
+            delta: 移动步长，``-1`` 表示上移，``+1`` 表示下移。
+
+        Returns:
+            ``True`` 表示移动成功，``False`` 表示越界或卡片不存在。
+        """
+        if card not in self._cards or delta == 0:
+            return False
+        old_index = self._cards.index(card)
+        new_index = old_index + delta
+        if new_index < 0 or new_index >= len(self._cards):
+            return False
+        self._cards.pop(old_index)
+        self._cards.insert(new_index, card)
+        # 同步 layout：先取出再按新位置插入。
+        # layout 中布局顺序为 [empty_label, *cards, stretch]，
+        # 所以卡片在 layout 中的索引比在 self._cards 中大 1。
+        self._cards_layout.removeWidget(card)
+        self._cards_layout.insertWidget(new_index + 1, card)
+        return True
+
     def get_cards(self) -> list[StreamCardView]:
         """获取所有卡片引用。"""
         return list(self._cards)

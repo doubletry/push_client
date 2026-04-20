@@ -83,6 +83,8 @@ class StreamCardView(QFrame):
     loop_toggled        = Signal(bool)
     preview_clicked      = Signal()
     title_edited        = Signal(str)
+    move_up_clicked     = Signal()
+    move_down_clicked   = Signal()
 
     def __init__(self, channel_index: int, parent=None):
         """初始化推流通道卡片。
@@ -93,7 +95,11 @@ class StreamCardView(QFrame):
         """
         super().__init__(parent)
         self._channel_index = channel_index
+        self._position_index = channel_index  # 列表位置（由 Controller 在排序/增删后刷新）
         self._config_locked = False
+        self._streaming = False
+        self._can_move_up = False
+        self._can_move_down = False
         self._source_paths_cache: dict[str, str] = {}  # 每种源类型保存的路径
         self._current_source_type: str = "video"  # 当前源类型
 
@@ -123,6 +129,21 @@ class StreamCardView(QFrame):
         # ── 标题栏（可点击编辑）──
         self._title_text = f"推流通道 {self._channel_index + 1}"
 
+        # 序号徽标（显示卡片在列表中的位置）
+        self._position_badge = QLabel(f"#{self._position_index + 1}")
+        badge_font = QFont()
+        badge_font.setBold(True)
+        self._position_badge.setFont(badge_font)
+        self._position_badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._position_badge.setFixedWidth(36)
+        self._position_badge.setStyleSheet(f"""
+            background-color: {Theme.MAUVE};
+            color: {Theme.BASE};
+            border-radius: {Theme.RADIUS_SMALL}px;
+            padding: 4px;
+        """)
+        self._position_badge.setToolTip("当前卡片在列表中的位置")
+
         self._title_label = QLabel(self._title_text)
         title_font = QFont()
         title_font.setBold(True)
@@ -144,8 +165,13 @@ class StreamCardView(QFrame):
         self._title_edit.returnPressed.connect(self._finish_title_edit)
         self._title_edit.editingFinished.connect(self._finish_title_edit)
 
-        root.addWidget(self._title_label)
-        root.addWidget(self._title_edit)
+        title_row = QHBoxLayout()
+        title_row.setSpacing(8)
+        title_row.setContentsMargins(0, 0, 0, 0)
+        title_row.addWidget(self._position_badge)
+        title_row.addWidget(self._title_label, 1)
+        title_row.addWidget(self._title_edit, 1)
+        root.addLayout(title_row)
 
         # ── 第 1 行：视频源选择 ──
         root.addLayout(self._build_row1())
@@ -416,6 +442,39 @@ class StreamCardView(QFrame):
 
         row.addStretch()
 
+        # 上下移动按钮（用于卡片排序）
+        move_btn_style = f"""
+            QPushButton {{
+                background-color: transparent;
+                color: {Theme.OVERLAY2};
+                border: 1px solid {Theme.SURFACE2};
+                border-radius: {Theme.RADIUS_SMALL}px;
+                font-weight: bold;
+                padding: 0px;
+            }}
+            QPushButton:hover:enabled {{
+                background-color: {Theme.SURFACE1};
+                color: {Theme.TEXT};
+            }}
+            QPushButton:disabled {{
+                color: {Theme.OVERLAY0};
+                border-color: {Theme.SURFACE1};
+            }}
+        """
+        self._move_up_btn = QPushButton("\u2191")
+        self._move_up_btn.setFixedSize(28, 24)
+        self._move_up_btn.setToolTip("上移卡片")
+        self._move_up_btn.setStyleSheet(move_btn_style)
+        self._move_up_btn.setEnabled(False)
+        row.addWidget(self._move_up_btn)
+
+        self._move_down_btn = QPushButton("\u2193")
+        self._move_down_btn.setFixedSize(28, 24)
+        self._move_down_btn.setToolTip("下移卡片")
+        self._move_down_btn.setStyleSheet(move_btn_style)
+        self._move_down_btn.setEnabled(False)
+        row.addWidget(self._move_down_btn)
+
         return row
 
     # ==================================================================
@@ -436,6 +495,8 @@ class StreamCardView(QFrame):
         self._start_btn.clicked.connect(self.start_clicked.emit)
         self._stop_btn.clicked.connect(self.stop_clicked.emit)
         self._remove_btn.clicked.connect(self.remove_clicked.emit)
+        self._move_up_btn.clicked.connect(self.move_up_clicked.emit)
+        self._move_down_btn.clicked.connect(self.move_down_clicked.emit)
         # 参数编辑
         self._stream_name_input.textChanged.connect(self.stream_name_edited.emit)
         self._codec_combo.currentTextChanged.connect(self.codec_changed.emit)
@@ -724,12 +785,47 @@ class StreamCardView(QFrame):
         Args:
             is_streaming: ``True`` 表示正在推流。
         """
+        self._streaming = is_streaming
         self._start_btn.setEnabled(not is_streaming)
         self._stop_btn.setEnabled(is_streaming)
         self._preview_btn.setEnabled(is_streaming)
         if not is_streaming:
             self._preview_btn.setText("\U0001f441 预览")
         self._remove_btn.setEnabled(not is_streaming)
+        # 推流中禁止上下移动卡片
+        self._apply_move_buttons_state()
+
+    def set_position_index(self, index: int):
+        """设置该卡片在列表中的位置索引（0 起始），并刷新序号徽标。
+
+        Args:
+            index: 卡片在列表中的位置（从 0 开始）。
+        """
+        if index < 0:
+            return
+        self._position_index = index
+        self._position_badge.setText(f"#{index + 1}")
+
+    def get_position_index(self) -> int:
+        """获取该卡片在列表中的位置索引（0 起始）。"""
+        return self._position_index
+
+    def set_move_buttons_enabled(self, can_up: bool, can_down: bool):
+        """设置上下移动按钮的启用状态（边界处禁用）。
+
+        Args:
+            can_up:   是否允许上移。
+            can_down: 是否允许下移。
+        """
+        self._can_move_up = bool(can_up)
+        self._can_move_down = bool(can_down)
+        self._apply_move_buttons_state()
+
+    def _apply_move_buttons_state(self):
+        """根据当前推流状态与边界标志，统一刷新移动按钮的启用状态。"""
+        allow = not self._streaming
+        self._move_up_btn.setEnabled(allow and self._can_move_up)
+        self._move_down_btn.setEnabled(allow and self._can_move_down)
 
     def set_can_start(self, can: bool):
         """设置"开始推流"按钮是否可用。"""
