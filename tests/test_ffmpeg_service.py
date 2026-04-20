@@ -9,6 +9,7 @@ import pytest
 from beaverpush.services.ffmpeg_service import (
     build_ffmpeg_command, friendly_error, _make_even, FFmpegWorker,
     check_rtsp_server_reachable, RTSP_TIMEOUT_US,
+    _mask_sensitive_cmd,
 )
 
 
@@ -740,3 +741,25 @@ class TestCheckRtspServerReachable:
             )
         assert ok is False
         assert "认证失败" in message
+
+
+class TestMaskSensitiveCmd:
+    """``_mask_sensitive_cmd`` 把 RTSP URL 里的密码替换为 ``***`` 后再写日志，
+    避免 ``%APPDATA%/BeaverPush/logs/*.log`` 留下明文凭据。"""
+
+    def test_masks_password_in_rtsp_url(self):
+        cmd = ["ffmpeg", "-i", "input.mp4",
+               "-f", "rtsp", "rtsp://alice:s3cret@host:554/stream"]
+        masked = _mask_sensitive_cmd(cmd)
+        assert "s3cret" not in masked
+        assert "rtsp://alice:***@host:554/stream" in masked
+
+    def test_passthrough_when_no_credentials(self):
+        cmd = ["ffmpeg", "-i", "in.mp4", "-f", "rtsp", "rtsp://host:554/s"]
+        assert _mask_sensitive_cmd(cmd) == " ".join(cmd)
+
+    def test_does_not_modify_original_list(self):
+        secret_url = "rtsp://u:p@h:554/x"
+        cmd = ["ffmpeg", secret_url]
+        _mask_sensitive_cmd(cmd)
+        assert cmd[1] == secret_url

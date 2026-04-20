@@ -133,12 +133,16 @@ def load_config() -> AppConfig:
 
 
 def save_config(cfg: AppConfig):
-    """保存配置到文件。
+    """保存配置到文件（原子写）。
 
     注意：``auth_secret`` 会按当前设计以明文写入本地 ``config.json``。
+
+    采用「写临时文件 + ``os.replace`` 原子替换」的方式，避免在写入过程中
+    进程崩溃 / 断电时把 ``config.json`` 留成半截 JSON 导致下次启动加载失败。
     """
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-    CONFIG_FILE.write_text(
-        json.dumps(asdict(cfg), ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
+    payload = json.dumps(asdict(cfg), ensure_ascii=False, indent=2)
+    tmp_file = CONFIG_FILE.with_suffix(CONFIG_FILE.suffix + ".tmp")
+    tmp_file.write_text(payload, encoding="utf-8")
+    # ``Path.replace`` 在 Windows 上也是原子的（覆盖目标文件）。
+    tmp_file.replace(CONFIG_FILE)

@@ -53,6 +53,18 @@ READY_LINE_KEYWORDS = (
     "press [q] to stop",
     "output #0, rtsp",
 )
+# RTSP URL 中的密码 / 授权码部分；用于把命令行中带凭据的 RTSP URL
+# 脱敏后再写入日志，避免 ``%APPDATA%/BeaverPush/logs/*.log`` 留下明文密码。
+_RTSP_CRED_RE = re.compile(r"(rtsp://[^:/@\s]+:)([^@\s]+)(@)", re.IGNORECASE)
+
+
+def _mask_sensitive_cmd(cmd: list[str]) -> str:
+    """返回 ffmpeg 命令行的可读字符串，并把 RTSP URL 中的密码替换为 ``***``。
+
+    仅用于日志输出；不会影响实际执行的命令列表。
+    """
+    masked = [_RTSP_CRED_RE.sub(r"\1***\3", arg) for arg in cmd]
+    return " ".join(masked)
 
 
 def _make_even(v: int) -> int:
@@ -232,7 +244,7 @@ class FFmpegWorker(QThread):
         self._stop_flag = False
         self._streaming_announced = False
         self.status_changed.emit("正在启动推流...")
-        logger.debug("FFmpeg 启动命令: {}", " ".join(self._cmd))
+        logger.debug("FFmpeg 启动命令: {}", _mask_sensitive_cmd(self._cmd))
 
         try:
             use_pipe = (
@@ -393,7 +405,12 @@ class FFmpegWorker(QThread):
             # 仅当预览仍处于启用状态时才发信号（用户主动停止时已置 False）
             if self._preview_enabled:
                 self._preview_enabled = False
-                self.preview_closed.emit()
+                # 主窗口可能已被关闭、Worker QObject 已销毁，
+                # 此时直接 emit 会触发 RuntimeError 让进程崩溃；吞掉即可。
+                try:
+                    self.preview_closed.emit()
+                except RuntimeError:
+                    pass
 
         t = threading.Thread(target=_watch, daemon=True)
         t.start()
@@ -455,7 +472,11 @@ class FFmpegWorker(QThread):
                 self._source_type,
                 timeout,
             )
-            self.error_occurred.emit(msg)
+            try:
+                self.error_occurred.emit(msg)
+            except RuntimeError:
+                # Worker QObject 可能已被销毁，避免后台守护线程把进程拖垮
+                pass
             try:
                 current.terminate()
             except Exception:

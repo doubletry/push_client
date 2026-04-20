@@ -174,7 +174,12 @@ class AppController(QObject):
             except Exception:
                 logger.exception("编码器探测失败，回退使用全部编码器选项")
                 codecs = []
-            self.codecs_detected.emit(codecs)
+            # 用户可能在探测期间关闭主窗口，此时 self 这个 QObject
+            # 已经被销毁，emit 会抛出 RuntimeError 让进程崩溃。
+            try:
+                self.codecs_detected.emit(codecs)
+            except RuntimeError:
+                pass
 
         threading.Thread(
             target=_worker, name="encoder-probe", daemon=True,
