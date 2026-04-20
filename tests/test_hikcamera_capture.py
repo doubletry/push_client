@@ -93,7 +93,7 @@ def _install_fake_hikcamera(camera_factory):
 
 
 @pytest.fixture
-def fake_hikcamera(monkeypatch):
+def fake_hikcamera():
     """每个测试自动卸载伪造模块以避免互相污染。"""
     _FakeCamera.instances = []
     yield

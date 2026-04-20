@@ -4,6 +4,8 @@ import subprocess
 import time
 from unittest import mock
 
+import pytest
+
 from beaverpush.services.ffmpeg_service import (
     build_ffmpeg_command, friendly_error, _make_even, FFmpegWorker,
     check_rtsp_server_reachable, RTSP_TIMEOUT_US,
@@ -214,7 +216,6 @@ class TestBuildFfmpegCommandCamera:
 
 class TestBuildFfmpegCommandUnsupported:
     def test_unsupported_type_raises(self):
-        import pytest
         with pytest.raises(ValueError):
             build_ffmpeg_command(
                 source_type="unknown",
@@ -271,7 +272,6 @@ class TestBuildFfmpegCommandHikCamera:
         assert cmd[cmd.index("-framerate") + 1] == "30"
 
     def test_hikcamera_requires_dimensions(self):
-        import pytest
         with pytest.raises(ValueError):
             build_ffmpeg_command(
                 source_type="hikcamera",

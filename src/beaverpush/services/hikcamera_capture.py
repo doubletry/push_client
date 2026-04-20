@@ -30,6 +30,8 @@ import subprocess
 import threading
 from collections.abc import Callable
 
+import numpy as np
+
 from .log_service import logger
 
 
@@ -256,12 +258,6 @@ class HikCameraFeeder:
 
         if w == self._expected_w and h == self._expected_h:
             return bytes(image.tobytes())
-
-        try:
-            import numpy as np
-        except ImportError:
-            # 不太可能：hikcamera 已依赖 numpy，但保险起见返回零帧
-            return b"\x00" * self._frame_bytes
 
         out = np.zeros((self._expected_h, self._expected_w, 3), dtype=np.uint8)
         copy_h = min(h, self._expected_h)
