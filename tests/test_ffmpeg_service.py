@@ -293,8 +293,19 @@ class TestBuildFfmpegCommandHikCamera:
         assert "zerolatency" in cmd
 
     def test_hikcamera_custom_hardware_codec(self):
-        """硬件加速编码器应被原样透传。"""
-        for codec in ("libx265", "h264_nvenc", "hevc_nvenc"):
+        """硬件加速编码器应被原样透传，并使用各自合法的 -preset。"""
+        # 不同编码器对 -preset 的合法取值不同：
+        #   libx264/libx265 → ultrafast, zerolatency
+        #   h264_nvenc/hevc_nvenc → p1, ll  (NVENC 不接受 ultrafast)
+        #   h264_qsv/hevc_qsv → veryfast    (QSV 没有 zerolatency)
+        cases = {
+            "libx265": ("ultrafast", "zerolatency"),
+            "h264_nvenc": ("p1", "ll"),
+            "hevc_nvenc": ("p1", "ll"),
+            "h264_qsv": ("veryfast", None),
+            "hevc_qsv": ("veryfast", None),
+        }
+        for codec, (preset, tune) in cases.items():
             cmd = build_ffmpeg_command(
                 source_type="hikcamera",
                 source_path="SN001",
@@ -305,6 +316,15 @@ class TestBuildFfmpegCommandHikCamera:
             )
             cv_idx = cmd.index("-c:v")
             assert cmd[cv_idx + 1] == codec, codec
+            assert preset in cmd, f"{codec}: 期望 preset {preset}"
+            if tune is None:
+                assert "-tune" not in cmd, f"{codec}: 不应包含 -tune"
+            else:
+                assert tune in cmd, f"{codec}: 期望 tune {tune}"
+            # 关键回归：nvenc/qsv 命令不能再误用 libx264 的 ultrafast/zerolatency
+            if codec.endswith("_nvenc") or codec.endswith("_qsv"):
+                assert "ultrafast" not in cmd, codec
+                assert "zerolatency" not in cmd, codec
 
     def test_hikcamera_no_scale_filter_when_size_set(self):
         """hikcamera 输入尺寸已固定，不应额外插入 scale 滤镜。"""
@@ -378,6 +398,11 @@ class TestBuildFfmpegCommandEncoding:
         )
         cv_idx = cmd.index("-c:v")
         assert cmd[cv_idx + 1] == "h264_nvenc"
+        # NVENC 不接受 ultrafast/zerolatency；应使用 NVENC 自己的低延迟预设
+        assert "ultrafast" not in cmd
+        assert "zerolatency" not in cmd
+        assert "p1" in cmd
+        assert "ll" in cmd
 
     def test_bitrate_applied(self):
         cmd = build_ffmpeg_command(

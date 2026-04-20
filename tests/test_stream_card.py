@@ -191,6 +191,45 @@ class TestHikCameraSourceType:
             app.processEvents()
 
 
+class TestCodecOptionsFiltering:
+    """验证 set_available_codecs 按硬件探测结果裁剪下拉框。"""
+
+    def test_default_includes_qsv_and_nvenc(self):
+        from beaverpush.views import stream_card as sc
+        # 默认情况下全部候选都暴露给用户
+        assert "h264_qsv" in sc.CODEC_OPTIONS
+        assert "hevc_qsv" in sc.CODEC_OPTIONS
+        assert "h264_nvenc" in sc.CODEC_OPTIONS
+
+    def test_set_available_codecs_filters_unavailable_hardware(self):
+        from beaverpush.views import stream_card as sc
+        original = sc.CODEC_OPTIONS[:]
+        try:
+            sc.set_available_codecs(["libx264", "libx265", "h264_qsv"])
+            # "自动" 与 "copy" 永远保留
+            assert "自动" in sc.CODEC_OPTIONS
+            assert "copy" in sc.CODEC_OPTIONS
+            assert "libx264" in sc.CODEC_OPTIONS
+            assert "h264_qsv" in sc.CODEC_OPTIONS
+            # 未探测到的硬件编码器应被裁剪
+            assert "h264_nvenc" not in sc.CODEC_OPTIONS
+            assert "hevc_qsv" not in sc.CODEC_OPTIONS
+
+            # 新创建的卡片只展示裁剪后的列表
+            app = QApplication.instance() or QApplication([])
+            card = StreamCardView(0)
+            try:
+                items = [card._codec_combo.itemText(i)
+                         for i in range(card._codec_combo.count())]
+                assert "h264_nvenc" not in items
+                assert "h264_qsv" in items
+            finally:
+                card.deleteLater()
+                app.processEvents()
+        finally:
+            sc.CODEC_OPTIONS = original
+
+
 class TestPositionBadge:
     """验证卡片左上角的序号徽标。"""
 

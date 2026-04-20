@@ -83,7 +83,7 @@ uv run pytest
 | RTSP 拉流 | 从 RTSP 源拉流并转推 |
 | 屏幕捕获 | 捕获显示器/屏幕区域 |
 | 窗口捕获 | 捕获指定应用程序窗口 |
-| 海康工业相机 | 通过 [hikcamera](https://github.com/doubletry/HiKCamera) 库以 SN 自动连接 Hikvision 工业相机（需另行安装 [Hikvision MVS SDK](https://www.hikrobotics.com/cn/machinevision/service/download/?module=0)），BGR8 取帧后通过 FFmpeg rawvideo 管道编码并推流；支持 libx264 / libx265 / h264_nvenc / hevc_nvenc 等编码器，自带断线重连（与 RTSP 重连配置共用） |
+| 海康工业相机 | 通过 SN 获取海康工业相机画面 |
 
 ### 高级设置
 

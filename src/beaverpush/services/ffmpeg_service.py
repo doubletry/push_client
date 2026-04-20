@@ -60,6 +60,26 @@ def _make_even(v: int) -> int:
     return v if v % 2 == 0 else v + 1
 
 
+def _low_latency_encode_args(codec: str) -> list[str]:
+    """为给定编码器返回低延迟相关的 ``-preset`` / ``-tune`` 参数。
+
+    不同编码器对 ``-preset`` 的合法取值完全不同，混用会让 FFmpeg 报
+    ``Error setting option preset``。因此这里按编码器分发：
+
+    - ``libx264`` / ``libx265``: ``-preset ultrafast -tune zerolatency``
+    - ``h264_nvenc`` / ``hevc_nvenc``: ``-preset p1 -tune ll``（NVENC 低延迟预设）
+    - ``h264_qsv`` / ``hevc_qsv``: ``-preset veryfast``（QSV 没有 ``zerolatency`` tune）
+    - 其他编码器：返回空列表，沿用 FFmpeg 默认参数
+    """
+    if codec in ("libx264", "libx265"):
+        return ["-preset", "ultrafast", "-tune", "zerolatency"]
+    if codec in ("h264_nvenc", "hevc_nvenc"):
+        return ["-preset", "p1", "-tune", "ll"]
+    if codec in ("h264_qsv", "hevc_qsv"):
+        return ["-preset", "veryfast"]
+    return []
+
+
 def normalize_rtsp_server(rtsp_server: str) -> str:
     """规范化 RTSP 服务器地址并校验基本格式。"""
     normalized = rtsp_server.strip()
@@ -666,19 +686,17 @@ def build_ffmpeg_command(
     # ---- 编码 ----
     if source_type in ("screen", "window", "camera", "hikcamera"):
         codec = video_codec if video_codec else "libx264"
-        cmd += ["-c:v", codec, "-preset", "ultrafast", "-tune", "zerolatency"]
+        cmd += ["-c:v", codec] + _low_latency_encode_args(codec)
     elif source_type == "rtsp":
         codec = video_codec if video_codec else "libx264"
         cmd += ["-c:v", codec]
-        if codec == "libx264":
-            cmd += ["-preset", "ultrafast", "-tune", "zerolatency"]
+        cmd += _low_latency_encode_args(codec)
         if codec == "copy":
             cmd += ["-c:a", "copy"]
     else:
         codec = video_codec if video_codec else "libx264"
         cmd += ["-c:v", codec]
-        if codec == "libx264":
-            cmd += ["-preset", "ultrafast", "-tune", "zerolatency"]
+        cmd += _low_latency_encode_args(codec)
         if codec == "copy":
             cmd += ["-c:a", "copy"]
 

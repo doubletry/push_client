@@ -29,7 +29,9 @@ from ..services.device_service import (
 )
 from ..services.ffmpeg_service import check_rtsp_server_reachable
 from ..services.connectivity_service import ConnectivityCheckWorker
+from ..services.encoder_probe import detect_available_encoders
 from ..views.main_window import MainWindow
+from ..views import stream_card as stream_card_module
 from ..views.stream_card import StreamCardView
 from .stream_controller import StreamController
 from ..services.log_service import logger
@@ -67,6 +69,19 @@ class AppController(QObject):
 
         # 获取主板 UUID 作为默认设备名
         self._default_machine_name = get_motherboard_uuid()
+
+        # 探测当前机器实际可用的编码器，UI 中只展示这些编码器，
+        # 避免选了 nvenc/qsv 但硬件不支持时启动后才报错。
+        # 若探测异常或结果为空（例如开发环境没有 ffmpeg），则保留默认全部选项。
+        try:
+            available_codecs = detect_available_encoders()
+            if available_codecs:
+                stream_card_module.set_available_codecs(available_codecs)
+                logger.info("可用编码器: {}", available_codecs)
+            else:
+                logger.warning("未探测到任何可用编码器，保留默认编码器选项")
+        except Exception:
+            logger.exception("编码器探测失败，回退使用全部编码器选项")
 
         # 同步初始状态到 View
         self._window.set_server(self._rtsp_server)

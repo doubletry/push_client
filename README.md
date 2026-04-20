@@ -83,7 +83,7 @@ The stream path follows a three-level structure: `{username}/{machine}/{channel}
 | RTSP | Pull from an RTSP source and re-push |
 | Screen | Capture a display/monitor region |
 | Window | Capture a specific application window |
-| Hikvision Industrial Camera | Connect to a Hikvision industrial camera by serial number via the [hikcamera](https://github.com/doubletry/HiKCamera) library (requires the [Hikvision MVS SDK](https://www.hikrobotics.com/cn/machinevision/service/download/?module=0)). Frames are grabbed in BGR8 and piped to FFmpeg `rawvideo` for re-encoding (libx264 / libx265 / h264_nvenc / hevc_nvenc are all supported) and built-in disconnect/auto-reconnect (shares the RTSP reconnect settings) |
+| Hikvision Industrial Camera | Capture from a Hikvision industrial camera by serial number |
 
 ### Advanced Settings
 
