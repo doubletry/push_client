@@ -433,7 +433,13 @@ class TestBuildFfmpegCommandEncoding:
         assert h264_cmd[h264_cmd.index("-profile:v") + 1] == "main"
 
     def test_software_codecs_no_extra_webrtc_args(self):
-        """libx264/libx265 已经默认无 B 帧 + 合理 GOP，不应额外注入 -bf/-g。"""
+        """libx264/libx265 不应被注入 ``-bf 0`` / ``-g``。
+
+        说明：libx264 默认 ``-bf 3``，但我们对软件编码器一律加上
+        ``-tune zerolatency``（见 ``_low_latency_encode_args``），该 tune
+        会把 B 帧禁用、把 GOP 设到合理范围，已经满足 WebRTC 兼容，
+        无需在命令行再叠加 ``-bf``/``-g``。
+        """
         for codec in ("libx264", "libx265"):
             cmd = build_ffmpeg_command(
                 source_type="screen",
