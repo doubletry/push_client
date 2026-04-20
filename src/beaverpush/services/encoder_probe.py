@@ -33,7 +33,13 @@ HARDWARE_ENCODERS: tuple[str, ...] = (
 
 
 def _ffmpeg_lists_encoder(name: str, timeout: float = 5.0) -> bool:
-    """快速判断 FFmpeg 是否注册了某个编码器。"""
+    """快速判断 FFmpeg 是否注册了某个编码器。
+
+    解析 ``ffmpeg -hide_banner -encoders`` 的输出，每行格式形如：
+    ``" V..... libx264              libh264 H.264 / AVC / MPEG-4 AVC..."``。
+    我们按行分割后检查"第二个空白分隔字段"是否等于 ``name``，避免
+    被名字中包含子串的描述文本（如 ``libx264rgb``）误匹配。
+    """
     try:
         result = subprocess.run(
             [get_ffmpeg(), "-hide_banner", "-encoders"],
@@ -44,7 +50,12 @@ def _ffmpeg_lists_encoder(name: str, timeout: float = 5.0) -> bool:
         )
     except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
         return False
-    return f" {name} " in result.stdout
+    for line in result.stdout.splitlines():
+        parts = line.split()
+        # 合法的编码器行至少 3 列：flags、name、description...
+        if len(parts) >= 2 and parts[1] == name:
+            return True
+    return False
 
 
 def _probe_encoder(name: str, timeout: float = 8.0) -> bool:

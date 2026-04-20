@@ -34,6 +34,17 @@ class TestFFmpegListsEncoder:
         ):
             assert encoder_probe._ffmpeg_lists_encoder("h264_qsv") is False
 
+    def test_substring_does_not_false_match(self):
+        # "libx264rgb" 不应让 "libx264" 误判为不存在 / 让 "libx264" 之外的
+        # 名字命中。这里只列出 libx264rgb，查询 libx264 应返回 False。
+        listing = " V..... libx264rgb           Libx264 RGB encoder\n"
+        with mock.patch(
+            "beaverpush.services.encoder_probe.subprocess.run",
+            return_value=_fake_completed(stdout=listing),
+        ):
+            assert encoder_probe._ffmpeg_lists_encoder("libx264") is False
+            assert encoder_probe._ffmpeg_lists_encoder("libx264rgb") is True
+
     def test_ffmpeg_missing_returns_false(self):
         with mock.patch(
             "beaverpush.services.encoder_probe.subprocess.run",
