@@ -11,6 +11,20 @@ from beaverpush.services.ffmpeg_service import (
     check_rtsp_server_reachable, RTSP_TIMEOUT_US,
     _mask_sensitive_cmd,
 )
+from beaverpush.services import ffmpeg_service as _ffmpeg_service_mod
+
+
+@pytest.fixture(autouse=True)
+def _force_nvenc_new_presets():
+    """让 ``_low_latency_encode_args`` 在测试中固定走"新版 ffmpeg"分支
+    （``-preset p1 -tune ll``），避免本机 PATH 上恰好是旧版 ffmpeg
+    时让针对 nvenc 的断言飘忽不定。需要测旧版 fallback 的用例自行覆写。"""
+    original = _ffmpeg_service_mod._NVENC_NEW_PRESETS_CACHE
+    _ffmpeg_service_mod._NVENC_NEW_PRESETS_CACHE = True
+    try:
+        yield
+    finally:
+        _ffmpeg_service_mod._NVENC_NEW_PRESETS_CACHE = original
 
 
 class TestMakeEven:
@@ -763,3 +777,62 @@ class TestMaskSensitiveCmd:
         cmd = ["ffmpeg", secret_url]
         _mask_sensitive_cmd(cmd)
         assert cmd[1] == secret_url
+
+
+class TestNvencLegacyPresetFallback:
+    """老版 ffmpeg (n4.x 等) 的 nvenc 不支持 ``p1..p7`` 预设也没有 ``-tune``，
+    必须回退到 ``-preset llhp`` 不带 tune；否则 ffmpeg 会以
+    ``Error setting option preset to value p1`` 直接退出。"""
+
+    def test_uses_llhp_when_new_presets_unsupported(self, monkeypatch):
+        monkeypatch.setattr(
+            _ffmpeg_service_mod, "_NVENC_NEW_PRESETS_CACHE", False,
+        )
+        for codec in ("h264_nvenc", "hevc_nvenc"):
+            cmd = build_ffmpeg_command(
+                source_type="screen",
+                source_path="offset:0,0,1920,1080",
+                rtsp_url="rtsp://localhost:8554/c/s",
+                video_codec=codec,
+                framerate="30",
+            )
+            assert "p1" not in cmd, f"{codec}: 不应再使用新预设 p1"
+            assert "-tune" not in cmd, f"{codec}: 旧版 nvenc 没有 -tune 选项"
+            preset_idx = cmd.index("-preset")
+            assert cmd[preset_idx + 1] == "llhp", codec
+
+    def test_probe_caches_result(self, monkeypatch):
+        """``_nvenc_supports_new_presets`` 必须只跑一次 ffmpeg 进程，
+        以免每次构建命令都付出 100~300ms 的拉起开销。"""
+        monkeypatch.setattr(
+            _ffmpeg_service_mod, "_NVENC_NEW_PRESETS_CACHE", None,
+        )
+        call_count = {"n": 0}
+
+        def fake_run(*args, **kwargs):
+            call_count["n"] += 1
+            return subprocess.CompletedProcess(
+                args=args, returncode=0,
+                stdout="       p1              12   E..V....... fastest\n",
+                stderr="",
+            )
+
+        monkeypatch.setattr(
+            _ffmpeg_service_mod.subprocess, "run", fake_run,
+        )
+        assert _ffmpeg_service_mod._nvenc_supports_new_presets() is True
+        assert _ffmpeg_service_mod._nvenc_supports_new_presets() is True
+        assert call_count["n"] == 1
+
+    def test_probe_falls_back_to_old_when_ffmpeg_missing(self, monkeypatch):
+        monkeypatch.setattr(
+            _ffmpeg_service_mod, "_NVENC_NEW_PRESETS_CACHE", None,
+        )
+
+        def boom(*args, **kwargs):
+            raise FileNotFoundError("no ffmpeg")
+
+        monkeypatch.setattr(
+            _ffmpeg_service_mod.subprocess, "run", boom,
+        )
+        assert _ffmpeg_service_mod._nvenc_supports_new_presets() is False

@@ -72,6 +72,46 @@ def _make_even(v: int) -> int:
     return v if v % 2 == 0 else v + 1
 
 
+def _nvenc_supports_new_presets() -> bool:
+    """探测当前 ``ffmpeg`` 的 ``h264_nvenc`` 是否支持 ``p1..p7`` 预设。
+
+    NVENC 在 FFmpeg n5.0 之后才引入 ``-preset p1..p7`` + ``-tune ll/hq/ull``
+    这套新预设；较老的发行版（如 n4.x，常见于第三方 PortableApps / 系统
+    PATH 上的旧二进制）只认旧预设 ``default/slow/medium/fast/hp/hq/bd/ll/
+    llhq/llhp/...``，并且没有 ``-tune`` 选项。如果我们对老版本仍传 ``-preset p1``
+    就会直接报 ``Error setting option preset to value p1``，导致硬件加速推流
+    无法启动。
+
+    这里跑一次 ``ffmpeg -h encoder=h264_nvenc``，根据帮助输出里有没有出现
+    ``p1`` 这个 token 来决定，并把结果缓存到模块级，避免每次 build 命令都
+    付出一次进程拉起开销。任何探测异常都按"不支持新预设"处理，回退到
+    旧预设是兼容性最高的安全选择。
+    """
+    global _NVENC_NEW_PRESETS_CACHE
+    cached = _NVENC_NEW_PRESETS_CACHE
+    if cached is not None:
+        return cached
+    try:
+        result = subprocess.run(
+            [get_ffmpeg(), "-hide_banner", "-h", "encoder=h264_nvenc"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            creationflags=CREATE_NO_WINDOW,
+        )
+        # 帮助输出里 ``p1`` 一定独立成行，例如 ``       p1              12 ...``。
+        # 用单词边界匹配避免误中 ``cap1`` / ``mp1`` 之类的子串。
+        supports = bool(re.search(r"\bp1\b", result.stdout or ""))
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+        supports = False
+    _NVENC_NEW_PRESETS_CACHE = supports
+    return supports
+
+
+# ``_nvenc_supports_new_presets`` 的进程级缓存。``None`` 表示尚未探测。
+_NVENC_NEW_PRESETS_CACHE: bool | None = None
+
+
 def _low_latency_encode_args(codec: str) -> list[str]:
     """为给定编码器返回低延迟相关的 ``-preset`` / ``-tune`` 参数。
 
@@ -79,14 +119,20 @@ def _low_latency_encode_args(codec: str) -> list[str]:
     ``Error setting option preset``。因此这里按编码器分发：
 
     - ``libx264`` / ``libx265``: ``-preset ultrafast -tune zerolatency``
-    - ``h264_nvenc`` / ``hevc_nvenc``: ``-preset p1 -tune ll``（NVENC 低延迟预设）
+    - ``h264_nvenc`` / ``hevc_nvenc``:
+        * 新版 FFmpeg (>= 5.0)：``-preset p1 -tune ll``（NVENC 新低延迟预设）
+        * 老版 FFmpeg (n4.x 等)：``-preset llhp``（``low latency hp``，
+          旧预设里语义最接近 ``p1+ll`` 的安全选项；没有 ``-tune``）
     - ``h264_qsv`` / ``hevc_qsv``: ``-preset veryfast``（QSV 没有 ``zerolatency`` tune）
     - 其他编码器：返回空列表，沿用 FFmpeg 默认参数
     """
     if codec in ("libx264", "libx265"):
         return ["-preset", "ultrafast", "-tune", "zerolatency"]
     if codec in ("h264_nvenc", "hevc_nvenc"):
-        return ["-preset", "p1", "-tune", "ll"]
+        if _nvenc_supports_new_presets():
+            return ["-preset", "p1", "-tune", "ll"]
+        # 旧版 nvenc：不能用 p1，也没有 -tune；llhp 等价于 low latency hp。
+        return ["-preset", "llhp"]
     if codec in ("h264_qsv", "hevc_qsv"):
         return ["-preset", "veryfast"]
     return []
