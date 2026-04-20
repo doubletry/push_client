@@ -136,6 +136,121 @@ class TestSourcePathsCache:
             app.processEvents()
 
 
+class TestHikCameraSourceType:
+    """海康工业相机视频源 UI 行为"""
+
+    def test_hikcamera_option_present(self):
+        from beaverpush.views.stream_card import SOURCE_TYPES
+        keys = [key for key, _ in SOURCE_TYPES]
+        assert "hikcamera" in keys
+
+    def test_switch_to_hikcamera_shows_text_input_only(self):
+        app = QApplication.instance() or QApplication([])
+        card = StreamCardView(0)
+        try:
+            card.set_source_type("hikcamera")
+            app.processEvents()
+            assert card._current_source_type == "hikcamera"
+            assert not card._source_input.isHidden()
+            assert card._device_combo.isHidden()
+            assert card._browse_btn.isHidden()
+            assert card._refresh_btn.isHidden()
+            assert card._loop_check.isHidden()
+            assert "SN" in card._source_input.placeholderText()
+        finally:
+            card.deleteLater()
+            app.processEvents()
+
+    def test_reconnect_visible_for_hikcamera_source(self):
+        """重连配置对海康相机源应可见，与 RTSP 一致。"""
+        app = QApplication.instance() or QApplication([])
+        card = StreamCardView(0)
+        try:
+            card.set_source_type("hikcamera")
+            app.processEvents()
+            assert not card._reconnect_container.isHidden()
+        finally:
+            card.deleteLater()
+            app.processEvents()
+
+    def test_hikcamera_sn_cached_across_source_type_switch(self):
+        app = QApplication.instance() or QApplication([])
+        card = StreamCardView(0)
+        try:
+            card.set_source_type("hikcamera")
+            app.processEvents()
+            card._source_input.setText("00DA1234567")
+            card.set_source_type("video")
+            app.processEvents()
+            # 切回 hikcamera 应恢复之前输入的 SN
+            card.set_source_type("hikcamera")
+            app.processEvents()
+            assert card._source_input.text() == "00DA1234567"
+        finally:
+            card.deleteLater()
+            app.processEvents()
+
+
+class TestCodecOptionsFiltering:
+    """验证 set_available_codecs 按硬件探测结果裁剪下拉框。"""
+
+    def test_default_includes_qsv_and_nvenc(self):
+        from beaverpush.views import stream_card as sc
+        # 默认情况下全部候选都暴露给用户
+        assert "h264_qsv" in sc.CODEC_OPTIONS
+        assert "hevc_qsv" in sc.CODEC_OPTIONS
+        assert "h264_nvenc" in sc.CODEC_OPTIONS
+
+    def test_set_available_codecs_filters_unavailable_hardware(self):
+        from beaverpush.views import stream_card as sc
+        original = sc.CODEC_OPTIONS[:]
+        try:
+            sc.set_available_codecs(["libx264", "libx265", "h264_qsv"])
+            # "自动" 与 "copy" 永远保留
+            assert "自动" in sc.CODEC_OPTIONS
+            assert "copy" in sc.CODEC_OPTIONS
+            assert "libx264" in sc.CODEC_OPTIONS
+            assert "h264_qsv" in sc.CODEC_OPTIONS
+            # 未探测到的硬件编码器应被裁剪
+            assert "h264_nvenc" not in sc.CODEC_OPTIONS
+            assert "hevc_qsv" not in sc.CODEC_OPTIONS
+
+            # 新创建的卡片只展示裁剪后的列表
+            app = QApplication.instance() or QApplication([])
+            card = StreamCardView(0)
+            try:
+                items = [card._codec_combo.itemText(i)
+                         for i in range(card._codec_combo.count())]
+                assert "h264_nvenc" not in items
+                assert "h264_qsv" in items
+            finally:
+                card.deleteLater()
+                app.processEvents()
+        finally:
+            sc.CODEC_OPTIONS = original
+
+    def test_refresh_available_codecs_updates_existing_card_and_falls_back(self):
+        from beaverpush.views import stream_card as sc
+        original = sc.CODEC_OPTIONS[:]
+        app = QApplication.instance() or QApplication([])
+        try:
+            card = StreamCardView(0)
+            try:
+                card.set_codec("h264_qsv")
+                sc.set_available_codecs(["libx264", "libx265", "h264_nvenc"])
+                card.refresh_available_codecs()
+                items = [card._codec_combo.itemText(i)
+                         for i in range(card._codec_combo.count())]
+                assert "h264_qsv" not in items
+                assert "h264_nvenc" in items
+                assert card.get_codec() == "自动"
+            finally:
+                card.deleteLater()
+                app.processEvents()
+        finally:
+            sc.CODEC_OPTIONS = original
+
+
 class TestPositionBadge:
     """验证卡片左上角的序号徽标。"""
 

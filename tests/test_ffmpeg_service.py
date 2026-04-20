@@ -4,10 +4,27 @@ import subprocess
 import time
 from unittest import mock
 
+import pytest
+
 from beaverpush.services.ffmpeg_service import (
     build_ffmpeg_command, friendly_error, _make_even, FFmpegWorker,
     check_rtsp_server_reachable, RTSP_TIMEOUT_US,
+    _mask_sensitive_cmd,
 )
+from beaverpush.services import ffmpeg_service as _ffmpeg_service_mod
+
+
+@pytest.fixture(autouse=True)
+def _force_nvenc_new_presets():
+    """让 ``_low_latency_encode_args`` 在测试中固定走"新版 ffmpeg"分支
+    （``-preset p1 -tune ll``），避免本机 PATH 上恰好是旧版 ffmpeg
+    时让针对 nvenc 的断言飘忽不定。需要测旧版 fallback 的用例自行覆写。"""
+    original = _ffmpeg_service_mod._NVENC_NEW_PRESETS_CACHE
+    _ffmpeg_service_mod._NVENC_NEW_PRESETS_CACHE = True
+    try:
+        yield
+    finally:
+        _ffmpeg_service_mod._NVENC_NEW_PRESETS_CACHE = original
 
 
 class TestMakeEven:
@@ -214,13 +231,137 @@ class TestBuildFfmpegCommandCamera:
 
 class TestBuildFfmpegCommandUnsupported:
     def test_unsupported_type_raises(self):
-        import pytest
         with pytest.raises(ValueError):
             build_ffmpeg_command(
                 source_type="unknown",
                 source_path="",
                 rtsp_url="rtsp://localhost:8554/c/s",
             )
+
+
+class TestBuildFfmpegCommandHikCamera:
+    """海康工业相机使用 rawvideo 管道 + bgr24"""
+
+    def test_hikcamera_uses_rawvideo_bgr24_pipe(self):
+        cmd = build_ffmpeg_command(
+            source_type="hikcamera",
+            source_path="00DA1234567",
+            rtsp_url="rtsp://localhost:8554/c/s",
+            width="1920",
+            height="1080",
+            framerate="25",
+        )
+        # 输入端
+        f_idx = cmd.index("-f")
+        assert cmd[f_idx + 1] == "rawvideo"
+        pf_idx = cmd.index("-pixel_format")
+        assert cmd[pf_idx + 1] == "bgr24"
+        vs_idx = cmd.index("-video_size")
+        assert cmd[vs_idx + 1] == "1920x1080"
+        assert "pipe:0" in cmd
+        # 输入帧率应来自参数；不应同时再追加 -r 出现两次帧率
+        fr_count = cmd.count("-framerate")
+        assert fr_count == 1
+        assert cmd[cmd.index("-framerate") + 1] == "25"
+        assert "-r" not in cmd
+
+    def test_hikcamera_dimensions_are_even(self):
+        cmd = build_ffmpeg_command(
+            source_type="hikcamera",
+            source_path="SN001",
+            rtsp_url="rtsp://localhost:8554/c/s",
+            width="1281",
+            height="721",
+        )
+        vs_idx = cmd.index("-video_size")
+        assert cmd[vs_idx + 1] == "1282x722"
+
+    def test_hikcamera_default_framerate(self):
+        cmd = build_ffmpeg_command(
+            source_type="hikcamera",
+            source_path="SN001",
+            rtsp_url="rtsp://localhost:8554/c/s",
+            width="1920",
+            height="1080",
+        )
+        assert cmd[cmd.index("-framerate") + 1] == "30"
+
+    def test_hikcamera_requires_dimensions(self):
+        with pytest.raises(ValueError):
+            build_ffmpeg_command(
+                source_type="hikcamera",
+                source_path="SN001",
+                rtsp_url="rtsp://localhost:8554/c/s",
+            )
+
+    def test_hikcamera_default_codec_libx264_with_low_latency(self):
+        cmd = build_ffmpeg_command(
+            source_type="hikcamera",
+            source_path="SN001",
+            rtsp_url="rtsp://localhost:8554/c/s",
+            width="1920",
+            height="1080",
+        )
+        cv_idx = cmd.index("-c:v")
+        assert cmd[cv_idx + 1] == "libx264"
+        assert "ultrafast" in cmd
+        assert "zerolatency" in cmd
+
+    def test_hikcamera_custom_hardware_codec(self):
+        """硬件加速编码器应被原样透传，并使用各自合法的 -preset。"""
+        # 不同编码器对 -preset 的合法取值不同：
+        #   libx264/libx265 → ultrafast, zerolatency
+        #   h264_nvenc/hevc_nvenc → p1, ll  (NVENC 不接受 ultrafast)
+        #   h264_qsv/hevc_qsv → veryfast    (QSV 没有 zerolatency)
+        cases = {
+            "libx265": ("ultrafast", "zerolatency"),
+            "h264_nvenc": ("p1", "ll"),
+            "hevc_nvenc": ("p1", "ll"),
+            "h264_qsv": ("veryfast", None),
+            "hevc_qsv": ("veryfast", None),
+        }
+        for codec, (preset, tune) in cases.items():
+            cmd = build_ffmpeg_command(
+                source_type="hikcamera",
+                source_path="SN001",
+                rtsp_url="rtsp://localhost:8554/c/s",
+                video_codec=codec,
+                width="1920",
+                height="1080",
+            )
+            cv_idx = cmd.index("-c:v")
+            assert cmd[cv_idx + 1] == codec, codec
+            assert preset in cmd, f"{codec}: 期望 preset {preset}"
+            if tune is None:
+                assert "-tune" not in cmd, f"{codec}: 不应包含 -tune"
+            else:
+                assert tune in cmd, f"{codec}: 期望 tune {tune}"
+            # 关键回归：nvenc/qsv 命令不能再误用 libx264 的 ultrafast/zerolatency
+            if codec.endswith("_nvenc") or codec.endswith("_qsv"):
+                assert "ultrafast" not in cmd, codec
+                assert "zerolatency" not in cmd, codec
+
+    def test_hikcamera_no_scale_filter_when_size_set(self):
+        """hikcamera 输入尺寸已固定，不应额外插入 scale 滤镜。"""
+        cmd = build_ffmpeg_command(
+            source_type="hikcamera",
+            source_path="SN001",
+            rtsp_url="rtsp://localhost:8554/c/s",
+            width="1920",
+            height="1080",
+        )
+        assert "-vf" not in cmd
+
+    def test_hikcamera_uses_wallclock_timestamps(self):
+        cmd = build_ffmpeg_command(
+            source_type="hikcamera",
+            source_path="SN001",
+            rtsp_url="rtsp://localhost:8554/c/s",
+            width="640",
+            height="480",
+        )
+        idx = cmd.index("-use_wallclock_as_timestamps")
+        assert cmd[idx + 1] == "1"
 
 
 class TestBuildFfmpegCommandScreenNoFilter:
@@ -272,6 +413,58 @@ class TestBuildFfmpegCommandEncoding:
         )
         cv_idx = cmd.index("-c:v")
         assert cmd[cv_idx + 1] == "h264_nvenc"
+        # NVENC 不接受 ultrafast/zerolatency；应使用 NVENC 自己的低延迟预设
+        assert "ultrafast" not in cmd
+        assert "zerolatency" not in cmd
+        assert "p1" in cmd
+        assert "ll" in cmd
+
+    def test_nvenc_qsv_webrtc_compat_args(self):
+        """NVENC/QSV 必须输出 -bf 0 与 -g <gop> 以便 mediamtx 转 WebRTC 后能被浏览器解码。
+
+        h264_nvenc 还需 ``-profile:v main`` 与主流浏览器实现对齐。
+        """
+        for codec in ("h264_nvenc", "hevc_nvenc", "h264_qsv", "hevc_qsv"):
+            cmd = build_ffmpeg_command(
+                source_type="screen",
+                source_path="offset:0,0,1920,1080",
+                rtsp_url="rtsp://localhost:8554/c/s",
+                video_codec=codec,
+                framerate="30",
+            )
+            assert "-bf" in cmd, codec
+            assert cmd[cmd.index("-bf") + 1] == "0", codec
+            assert "-g" in cmd, codec
+            # framerate=30 → gop=60
+            assert cmd[cmd.index("-g") + 1] == "60", codec
+
+        h264_cmd = build_ffmpeg_command(
+            source_type="hikcamera", source_path="SN001",
+            rtsp_url="rtsp://localhost:8554/c/s",
+            video_codec="h264_nvenc",
+            width="1920", height="1080", framerate="30",
+        )
+        assert "-profile:v" in h264_cmd
+        assert h264_cmd[h264_cmd.index("-profile:v") + 1] == "main"
+
+    def test_software_codecs_no_extra_webrtc_args(self):
+        """libx264/libx265 不应被注入 ``-bf 0`` / ``-g``。
+
+        说明：libx264 默认 ``-bf 3``，但我们对软件编码器一律加上
+        ``-tune zerolatency``（见 ``_low_latency_encode_args``），该 tune
+        会把 B 帧禁用、把 GOP 设到合理范围，已经满足 WebRTC 兼容，
+        无需在命令行再叠加 ``-bf``/``-g``。
+        """
+        for codec in ("libx264", "libx265"):
+            cmd = build_ffmpeg_command(
+                source_type="screen",
+                source_path="offset:0,0,1920,1080",
+                rtsp_url="rtsp://localhost:8554/c/s",
+                video_codec=codec,
+                framerate="30",
+            )
+            assert "-bf" not in cmd, codec
+            assert "-g" not in cmd, codec
 
     def test_bitrate_applied(self):
         cmd = build_ffmpeg_command(
@@ -309,6 +502,21 @@ class TestFFmpegWorkerInit:
         worker = FFmpegWorker()
         worker.set_window_capture(12345, 30)
         assert worker._window_hwnd == 12345
+
+    def test_has_hik_capture_method(self):
+        worker = FFmpegWorker()
+        assert hasattr(worker, "set_hik_capture")
+        worker.set_hik_capture("00DA1234567", 1920, 1080, 25)
+        assert worker._hik_sn == "00DA1234567"
+        assert worker._hik_w == 1920
+        assert worker._hik_h == 1080
+        assert worker._hik_fps == 25
+
+    def test_hik_capture_strips_sn_and_defaults_fps(self):
+        worker = FFmpegWorker()
+        worker.set_hik_capture("  SN001  ", 640, 480, 0)
+        assert worker._hik_sn == "SN001"
+        assert worker._hik_fps == 30
 
     def test_start_preview_now_sets_state(self):
         worker = FFmpegWorker()
@@ -547,3 +755,84 @@ class TestCheckRtspServerReachable:
             )
         assert ok is False
         assert "认证失败" in message
+
+
+class TestMaskSensitiveCmd:
+    """``_mask_sensitive_cmd`` 把 RTSP URL 里的密码替换为 ``***`` 后再写日志，
+    避免 ``%APPDATA%/BeaverPush/logs/*.log`` 留下明文凭据。"""
+
+    def test_masks_password_in_rtsp_url(self):
+        cmd = ["ffmpeg", "-i", "input.mp4",
+               "-f", "rtsp", "rtsp://alice:s3cret@host:554/stream"]
+        masked = _mask_sensitive_cmd(cmd)
+        assert "s3cret" not in masked
+        assert "rtsp://alice:***@host:554/stream" in masked
+
+    def test_passthrough_when_no_credentials(self):
+        cmd = ["ffmpeg", "-i", "in.mp4", "-f", "rtsp", "rtsp://host:554/s"]
+        assert _mask_sensitive_cmd(cmd) == " ".join(cmd)
+
+    def test_does_not_modify_original_list(self):
+        secret_url = "rtsp://u:p@h:554/x"
+        cmd = ["ffmpeg", secret_url]
+        _mask_sensitive_cmd(cmd)
+        assert cmd[1] == secret_url
+
+
+class TestNvencLegacyPresetFallback:
+    """老版 ffmpeg (n4.x 等) 的 nvenc 不支持 ``p1..p7`` 预设也没有 ``-tune``，
+    必须回退到 ``-preset llhp`` 不带 tune；否则 ffmpeg 会以
+    ``Error setting option preset to value p1`` 直接退出。"""
+
+    def test_uses_llhp_when_new_presets_unsupported(self, monkeypatch):
+        monkeypatch.setattr(
+            _ffmpeg_service_mod, "_NVENC_NEW_PRESETS_CACHE", False,
+        )
+        for codec in ("h264_nvenc", "hevc_nvenc"):
+            cmd = build_ffmpeg_command(
+                source_type="screen",
+                source_path="offset:0,0,1920,1080",
+                rtsp_url="rtsp://localhost:8554/c/s",
+                video_codec=codec,
+                framerate="30",
+            )
+            assert "p1" not in cmd, f"{codec}: 不应再使用新预设 p1"
+            assert "-tune" not in cmd, f"{codec}: 旧版 nvenc 没有 -tune 选项"
+            preset_idx = cmd.index("-preset")
+            assert cmd[preset_idx + 1] == "llhp", codec
+
+    def test_probe_caches_result(self, monkeypatch):
+        """``_nvenc_supports_new_presets`` 必须只跑一次 ffmpeg 进程，
+        以免每次构建命令都付出 100~300ms 的拉起开销。"""
+        monkeypatch.setattr(
+            _ffmpeg_service_mod, "_NVENC_NEW_PRESETS_CACHE", None,
+        )
+        call_count = {"n": 0}
+
+        def fake_run(*args, **kwargs):
+            call_count["n"] += 1
+            return subprocess.CompletedProcess(
+                args=args, returncode=0,
+                stdout="       p1              12   E..V....... fastest\n",
+                stderr="",
+            )
+
+        monkeypatch.setattr(
+            _ffmpeg_service_mod.subprocess, "run", fake_run,
+        )
+        assert _ffmpeg_service_mod._nvenc_supports_new_presets() is True
+        assert _ffmpeg_service_mod._nvenc_supports_new_presets() is True
+        assert call_count["n"] == 1
+
+    def test_probe_falls_back_to_old_when_ffmpeg_missing(self, monkeypatch):
+        monkeypatch.setattr(
+            _ffmpeg_service_mod, "_NVENC_NEW_PRESETS_CACHE", None,
+        )
+
+        def boom(*args, **kwargs):
+            raise FileNotFoundError("no ffmpeg")
+
+        monkeypatch.setattr(
+            _ffmpeg_service_mod.subprocess, "run", boom,
+        )
+        assert _ffmpeg_service_mod._nvenc_supports_new_presets() is False

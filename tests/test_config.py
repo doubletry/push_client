@@ -5,6 +5,8 @@ import tempfile
 from pathlib import Path
 from unittest import mock
 
+import pytest
+
 from beaverpush.models.config import (
     AppConfig, StreamConfig, load_config, save_config, load_stream_config,
 )
@@ -169,6 +171,31 @@ class TestConfigPersistence:
             assert cfg.username == ""
             assert cfg.machine_name == ""
             assert cfg.auth_secret == ""
+
+    def test_save_is_atomic_writes_via_tmp_file(self, tmp_path):
+        """``save_config`` 必须先写 ``.tmp`` 再原子替换，
+        防止崩溃 / 断电时把 ``config.json`` 留成半截 JSON。"""
+        config_file = tmp_path / "config.json"
+        # 预先放置一个合法旧配置；模拟"中途崩溃"时它必须保持完整。
+        original = "{\"rtsp_server\": \"rtsp://old\"}"
+        config_file.write_text(original, encoding="utf-8")
+
+        def boom(self, target):  # type: ignore[no-untyped-def]
+            raise RuntimeError("simulated crash before atomic replace")
+
+        with mock.patch("beaverpush.models.config.CONFIG_FILE", config_file), \
+             mock.patch("beaverpush.models.config.CONFIG_DIR", tmp_path), \
+             mock.patch("pathlib.Path.replace", boom):
+            with pytest.raises(RuntimeError):
+                save_config(AppConfig(rtsp_server="rtsp://new"))
+        # 旧文件保持原样，未被截断
+        assert config_file.read_text(encoding="utf-8") == original
+
+        # 正常路径仍然能完整覆盖
+        with mock.patch("beaverpush.models.config.CONFIG_FILE", config_file), \
+             mock.patch("beaverpush.models.config.CONFIG_DIR", tmp_path):
+            save_config(AppConfig(rtsp_server="rtsp://new"))
+            assert load_config().rtsp_server == "rtsp://new"
 
 
 class TestLoadStreamConfig:

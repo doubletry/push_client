@@ -356,6 +356,14 @@ class WindowCaptureFeeder:
         self._running = False
         if self._thread:
             self._thread.join(timeout=3)
+        # 主动关闭 stdin，让 ffmpeg 立即感知到 EOF 并退出，
+        # 避免上层只 terminate 进程时仍要等待 IO 超时。
+        proc = self._process
+        if proc is not None and proc.stdin is not None:
+            try:
+                proc.stdin.close()
+            except Exception:
+                pass
 
     def _feed_loop(self):
         interval = 1.0 / self.fps
@@ -614,6 +622,13 @@ class ScreenCaptureFeeder:
         self._running = False
         if self._thread:
             self._thread.join(timeout=3)
+        # 主动关闭 stdin，让 ffmpeg 立即感知到 EOF 并退出。
+        proc = self._process
+        if proc is not None and proc.stdin is not None:
+            try:
+                proc.stdin.close()
+            except Exception:
+                pass
 
     def _feed_loop(self):
         interval = 1.0 / self.fps

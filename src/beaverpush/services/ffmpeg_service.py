@@ -15,6 +15,7 @@ FFmpeg 推流服务模块
     - ``rtsp``   : RTSP 拉流再推流
     - ``screen`` : GDI 屏幕捕获（按显示器区域）
     - ``window`` : Win32 窗口捕获（rawvideo 管道 + PrintWindow/BitBlt）
+    - ``hikcamera`` : Hikvision 工业相机（rawvideo 管道 + bgr24）
 
 架构::
 
@@ -39,6 +40,7 @@ from PySide6.QtCore import QThread, Signal
 
 from .ffmpeg_path import get_ffmpeg, get_ffplay
 from .window_capture import WindowCaptureFeeder, ScreenCaptureFeeder, get_window_rect
+from .hikcamera_capture import HikCameraFeeder
 from .log_service import logger
 
 # Windows-only subprocess flag; on Unix the attribute does not exist and falls back to 0.
@@ -51,11 +53,89 @@ READY_LINE_KEYWORDS = (
     "press [q] to stop",
     "output #0, rtsp",
 )
+# RTSP URL 中的密码 / 授权码部分；用于把命令行中带凭据的 RTSP URL
+# 脱敏后再写入日志，避免 ``%APPDATA%/BeaverPush/logs/*.log`` 留下明文密码。
+_RTSP_CRED_RE = re.compile(r"(rtsp://[^:/@\s]+:)([^@\s]+)(@)", re.IGNORECASE)
+
+
+def _mask_sensitive_cmd(cmd: list[str]) -> str:
+    """返回 ffmpeg 命令行的可读字符串，并把 RTSP URL 中的密码替换为 ``***``。
+
+    仅用于日志输出；不会影响实际执行的命令列表。
+    """
+    masked = [_RTSP_CRED_RE.sub(r"\1***\3", arg) for arg in cmd]
+    return " ".join(masked)
 
 
 def _make_even(v: int) -> int:
     """将值调整为最近的偶数（FFmpeg 要求宽高为偶数）。"""
     return v if v % 2 == 0 else v + 1
+
+
+def _nvenc_supports_new_presets() -> bool:
+    """探测当前 ``ffmpeg`` 的 ``h264_nvenc`` 是否支持 ``p1..p7`` 预设。
+
+    NVENC 在 FFmpeg n5.0 之后才引入 ``-preset p1..p7`` + ``-tune ll/hq/ull``
+    这套新预设；较老的发行版（如 n4.x，常见于第三方 PortableApps / 系统
+    PATH 上的旧二进制）只认旧预设 ``default/slow/medium/fast/hp/hq/bd/ll/
+    llhq/llhp/...``，并且没有 ``-tune`` 选项。如果我们对老版本仍传 ``-preset p1``
+    就会直接报 ``Error setting option preset to value p1``，导致硬件加速推流
+    无法启动。
+
+    这里跑一次 ``ffmpeg -h encoder=h264_nvenc``，根据帮助输出里有没有出现
+    ``p1`` 这个 token 来决定，并把结果缓存到模块级，避免每次 build 命令都
+    付出一次进程拉起开销。任何探测异常都按"不支持新预设"处理，回退到
+    旧预设是兼容性最高的安全选择。
+    """
+    global _NVENC_NEW_PRESETS_CACHE
+    cached = _NVENC_NEW_PRESETS_CACHE
+    if cached is not None:
+        return cached
+    try:
+        result = subprocess.run(
+            [get_ffmpeg(), "-hide_banner", "-h", "encoder=h264_nvenc"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            creationflags=CREATE_NO_WINDOW,
+        )
+        # 帮助输出里 ``p1`` 一定独立成行，例如 ``       p1              12 ...``。
+        # 用单词边界匹配避免误中 ``cap1`` / ``mp1`` 之类的子串。
+        supports = bool(re.search(r"\bp1\b", result.stdout or ""))
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+        supports = False
+    _NVENC_NEW_PRESETS_CACHE = supports
+    return supports
+
+
+# ``_nvenc_supports_new_presets`` 的进程级缓存。``None`` 表示尚未探测。
+_NVENC_NEW_PRESETS_CACHE: bool | None = None
+
+
+def _low_latency_encode_args(codec: str) -> list[str]:
+    """为给定编码器返回低延迟相关的 ``-preset`` / ``-tune`` 参数。
+
+    不同编码器对 ``-preset`` 的合法取值完全不同，混用会让 FFmpeg 报
+    ``Error setting option preset``。因此这里按编码器分发：
+
+    - ``libx264`` / ``libx265``: ``-preset ultrafast -tune zerolatency``
+    - ``h264_nvenc`` / ``hevc_nvenc``:
+        * 新版 FFmpeg (>= 5.0)：``-preset p1 -tune ll``（NVENC 新低延迟预设）
+        * 老版 FFmpeg (n4.x 等)：``-preset llhp``（``low latency hp``，
+          旧预设里语义最接近 ``p1+ll`` 的安全选项；没有 ``-tune``）
+    - ``h264_qsv`` / ``hevc_qsv``: ``-preset veryfast``（QSV 没有 ``zerolatency`` tune）
+    - 其他编码器：返回空列表，沿用 FFmpeg 默认参数
+    """
+    if codec in ("libx264", "libx265"):
+        return ["-preset", "ultrafast", "-tune", "zerolatency"]
+    if codec in ("h264_nvenc", "hevc_nvenc"):
+        if _nvenc_supports_new_presets():
+            return ["-preset", "p1", "-tune", "ll"]
+        # 旧版 nvenc：不能用 p1，也没有 -tune；llhp 等价于 low latency hp。
+        return ["-preset", "llhp"]
+    if codec in ("h264_qsv", "hevc_qsv"):
+        return ["-preset", "veryfast"]
+    return []
 
 
 def normalize_rtsp_server(rtsp_server: str) -> str:
@@ -140,6 +220,7 @@ class FFmpegWorker(QThread):
         self._preview_process: subprocess.Popen | None = None
         self._capture_feeder: WindowCaptureFeeder | None = None
         self._screen_feeder: ScreenCaptureFeeder | None = None
+        self._hik_feeder: HikCameraFeeder | None = None
         self._stop_flag = False
         self._cmd: list[str] = []
         self._preview_url: str = ""
@@ -151,6 +232,10 @@ class FFmpegWorker(QThread):
         self._screen_w: int = 0
         self._screen_h: int = 0
         self._screen_fps: int = 30
+        self._hik_sn: str = ""
+        self._hik_w: int = 0
+        self._hik_h: int = 0
+        self._hik_fps: int = 30
         self._preview_monitor_thread: threading.Thread | None = None
         self._streaming_announced = False
         self._source_type: str = "video"
@@ -182,6 +267,13 @@ class FFmpegWorker(QThread):
         self._screen_h = h
         self._screen_fps = fps
 
+    def set_hik_capture(self, sn: str, width: int, height: int, fps: int = 30):
+        """配置海康工业相机捕获参数（在 ``run()`` 之前调用）。"""
+        self._hik_sn = (sn or "").strip()
+        self._hik_w = int(width)
+        self._hik_h = int(height)
+        self._hik_fps = fps if fps > 0 else 30
+
     def start_preview_now(self, rtsp_url: str):
         """在推流过程中动态开启预览。"""
         self._preview_url = rtsp_url
@@ -198,10 +290,14 @@ class FFmpegWorker(QThread):
         self._stop_flag = False
         self._streaming_announced = False
         self.status_changed.emit("正在启动推流...")
-        logger.debug("FFmpeg 启动命令: {}", " ".join(self._cmd))
+        logger.debug("FFmpeg 启动命令: {}", _mask_sensitive_cmd(self._cmd))
 
         try:
-            use_pipe = self._window_hwnd != 0 or self._screen_w != 0
+            use_pipe = (
+                self._window_hwnd != 0
+                or self._screen_w != 0
+                or bool(self._hik_sn)
+            )
 
             self._process = subprocess.Popen(
                 self._cmd,
@@ -225,6 +321,20 @@ class FFmpegWorker(QThread):
                     self._screen_fps,
                 )
                 self._screen_feeder.start(self._process)
+            elif use_pipe and self._hik_sn:
+                self._hik_feeder = HikCameraFeeder(
+                    self._hik_sn, self._hik_w, self._hik_h, self._hik_fps,
+                )
+                self._hik_feeder.set_error_callback(self.error_occurred.emit)
+                try:
+                    self._hik_feeder.start(self._process)
+                except Exception as exc:
+                    logger.exception("海康相机启动失败")
+                    self.error_occurred.emit(str(exc))
+                    try:
+                        self._process.terminate()
+                    except Exception:
+                        pass
 
             if self._preview_enabled and self._preview_url:
                 import time
@@ -287,6 +397,9 @@ class FFmpegWorker(QThread):
         if self._screen_feeder:
             self._screen_feeder.stop()
             self._screen_feeder = None
+        if self._hik_feeder:
+            self._hik_feeder.stop()
+            self._hik_feeder = None
         self._stop_preview()
         if self._process and self._process.poll() is None:
             try:
@@ -338,7 +451,12 @@ class FFmpegWorker(QThread):
             # 仅当预览仍处于启用状态时才发信号（用户主动停止时已置 False）
             if self._preview_enabled:
                 self._preview_enabled = False
-                self.preview_closed.emit()
+                # 主窗口可能已被关闭、Worker QObject 已销毁，
+                # 此时直接 emit 会触发 RuntimeError 让进程崩溃；吞掉即可。
+                try:
+                    self.preview_closed.emit()
+                except RuntimeError:
+                    pass
 
         t = threading.Thread(target=_watch, daemon=True)
         t.start()
@@ -351,6 +469,9 @@ class FFmpegWorker(QThread):
         if self._screen_feeder:
             self._screen_feeder.stop()
             self._screen_feeder = None
+        if self._hik_feeder:
+            self._hik_feeder.stop()
+            self._hik_feeder = None
         self._stop_preview()
         if self._process:
             try:
@@ -397,7 +518,11 @@ class FFmpegWorker(QThread):
                 self._source_type,
                 timeout,
             )
-            self.error_occurred.emit(msg)
+            try:
+                self.error_occurred.emit(msg)
+            except RuntimeError:
+                # Worker QObject 可能已被销毁，避免后台守护线程把进程拖垮
+                pass
             try:
                 current.terminate()
             except Exception:
@@ -483,7 +608,7 @@ def build_ffmpeg_command(
     """根据视频源类型构建完整的 FFmpeg 推流命令行。
 
     Args:
-        source_type: 视频源类型 (``"video"``/``"camera"``/``"rtsp"``/``"screen"``/``"window"``)
+        source_type: 视频源类型 (``"video"``/``"camera"``/``"rtsp"``/``"screen"``/``"window"``/``"hikcamera"``)
         source_path: 视频源路径。各类型的格式：
 
             - ``video``  : 文件绝对路径
@@ -491,6 +616,7 @@ def build_ffmpeg_command(
             - ``rtsp``   : RTSP 拉流 URL
             - ``screen`` : ``"offset:x,y,w,h"``（屏幕偏移与尺寸）
             - ``window`` : ``"hwnd:<句柄>"`` 或窗口标题
+            - ``hikcamera`` : 海康相机 SN（实际帧由 ``HikCameraFeeder`` 写入 stdin）
 
         rtsp_url:    RTSP 推流目标地址
         loop:        是否循环播放（仅 ``video`` 类型有效）
@@ -581,6 +707,27 @@ def build_ffmpeg_command(
             input_args += ["-i", f"title={source_path}"]
             cmd += input_args
 
+    elif source_type == "hikcamera":
+        # 海康工业相机：通过 HikCameraFeeder 把 BGR8 帧写入 stdin
+        # source_path 为相机 SN；宽高必须由控制器在调用前探测好
+        if not (width and height):
+            raise ValueError("海康相机源需要先探测画面尺寸")
+        try:
+            ow, oh = int(width), int(height)
+        except ValueError as exc:
+            raise ValueError("海康相机源宽高必须为整数") from exc
+        w = _make_even(ow)
+        h = _make_even(oh)
+        fps = framerate if framerate else "30"
+        cmd += [
+            "-use_wallclock_as_timestamps", "1",
+            "-f", "rawvideo",
+            "-pixel_format", "bgr24",
+            "-video_size", f"{w}x{h}",
+            "-framerate", fps,
+            "-i", "pipe:0",
+        ]
+
     else:
         raise ValueError(f"不支持的视频源类型: {source_type}")
 
@@ -588,11 +735,11 @@ def build_ffmpeg_command(
     filters = []
     codec = video_codec if video_codec else "libx264"
 
-    # copy 模式不能使用滤镜；管道源(screen/window)尺寸已在输入参数中指定
+    # copy 模式不能使用滤镜；管道源(screen/window/hikcamera)尺寸已在输入参数中指定
     need_scale = (
         width and height
         and codec != "copy"
-        and source_type not in ("screen", "window")
+        and source_type not in ("screen", "window", "hikcamera")
     )
     if need_scale:
         w_val = int(width) if width.isdigit() else width
@@ -604,21 +751,19 @@ def build_ffmpeg_command(
         filters.append(f"scale={w_val}:{h_val}")
 
     # ---- 编码 ----
-    if source_type in ("screen", "window", "camera"):
+    if source_type in ("screen", "window", "camera", "hikcamera"):
         codec = video_codec if video_codec else "libx264"
-        cmd += ["-c:v", codec, "-preset", "ultrafast", "-tune", "zerolatency"]
+        cmd += ["-c:v", codec] + _low_latency_encode_args(codec)
     elif source_type == "rtsp":
         codec = video_codec if video_codec else "libx264"
         cmd += ["-c:v", codec]
-        if codec == "libx264":
-            cmd += ["-preset", "ultrafast", "-tune", "zerolatency"]
+        cmd += _low_latency_encode_args(codec)
         if codec == "copy":
             cmd += ["-c:a", "copy"]
     else:
         codec = video_codec if video_codec else "libx264"
         cmd += ["-c:v", codec]
-        if codec == "libx264":
-            cmd += ["-preset", "ultrafast", "-tune", "zerolatency"]
+        cmd += _low_latency_encode_args(codec)
         if codec == "copy":
             cmd += ["-c:a", "copy"]
 
@@ -626,7 +771,7 @@ def build_ffmpeg_command(
     if filters:
         cmd += ["-vf", ",".join(filters)]
 
-    if framerate and source_type not in ("camera", "screen", "window"):
+    if framerate and source_type not in ("camera", "screen", "window", "hikcamera"):
         cmd += ["-r", framerate]
 
     if bitrate:
@@ -634,6 +779,22 @@ def build_ffmpeg_command(
 
     if codec != "copy":
         cmd += ["-pix_fmt", "yuv420p"]
+
+    # WebRTC 兼容：NVENC / QSV 默认带 B 帧（``-bf -1`` auto），mediamtx 转
+    # WebRTC 后浏览器 H.264 实现不支持 B 帧会黑屏；同时 GOP 默认 250 太长，
+    # WebRTC 客户端等待首个 IDR 时间过久。这里强制：
+    #   * ``-bf 0``：禁用 B 帧
+    #   * ``-g <fps*2>``：把关键帧间隔压到 ~2 秒，确保 WebRTC 首帧及时
+    #   * h264_nvenc 额外加 ``-profile:v main``：对齐主流浏览器的支持子集
+    if codec in ("h264_nvenc", "hevc_nvenc", "h264_qsv", "hevc_qsv"):
+        try:
+            fps_int = int(round(float(framerate))) if framerate else 30
+        except (TypeError, ValueError):
+            fps_int = 30
+        gop = max(1, fps_int * 2)
+        cmd += ["-bf", "0", "-g", str(gop)]
+        if codec == "h264_nvenc":
+            cmd += ["-profile:v", "main"]
 
     cmd += ["-f", "rtsp", "-rtsp_transport", "tcp", rtsp_url]
     return cmd
@@ -664,6 +825,8 @@ def friendly_error(msg: str) -> str:
         ("invalid data", "无效的数据格式。"),
         ("error initializing output stream", "编码器初始化失败，建议宽高设为偶数。"),
         ("incorrect parameters", "编码参数不兼容。"),
+        ("海康相机断开", "海康相机已断开，等待重连。"),
+        ("海康相机", "海康相机异常，请检查相机连接和 MVS SDK。"),
     ]
     for keyword, friendly in mapping:
         if keyword in lower:

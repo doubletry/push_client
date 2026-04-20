@@ -35,8 +35,8 @@ class StreamConfig:
 
     Attributes:
         name:         流名称，作为 RTSP URL 的最后一段路径
-        source_type:  视频源类型 (``"video"``/``"camera"``/``"rtsp"``/``"screen"``/``"window"``)
-        source_path:  视频文件路径 / 设备名 / RTSP URL / 屏幕偏移 / 窗口句柄
+        source_type:  视频源类型 (``"video"``/``"camera"``/``"rtsp"``/``"screen"``/``"window"``/``"hikcamera"``)
+        source_path:  视频文件路径 / 设备名 / RTSP URL / 屏幕偏移 / 窗口句柄 / 海康相机 SN
         rtsp_url:     完整的 RTSP 推流地址（由运行时拼接）
         loop:         是否循环播放（仅本地视频有效）
         preview:      是否启用 ffplay 预览
@@ -49,8 +49,8 @@ class StreamConfig:
     """
     name: str = ""
     title: str = ""             # 通道标题（可由用户自定义）
-    source_type: str = ""       # video / camera / rtsp / screen / window
-    source_path: str = ""       # 文件路径 / 设备名 / RTSP URL / 屏幕索引 / hwnd
+    source_type: str = ""       # video / camera / rtsp / screen / window / hikcamera
+    source_path: str = ""       # 文件路径 / 设备名 / RTSP URL / 屏幕索引 / hwnd / 海康相机 SN
     rtsp_url: str = ""
     loop: bool = False
     preview: bool = False
@@ -133,12 +133,16 @@ def load_config() -> AppConfig:
 
 
 def save_config(cfg: AppConfig):
-    """保存配置到文件。
+    """保存配置到文件（原子写）。
 
     注意：``auth_secret`` 会按当前设计以明文写入本地 ``config.json``。
+
+    采用「写临时文件 + ``os.replace`` 原子替换」的方式，避免在写入过程中
+    进程崩溃 / 断电时把 ``config.json`` 留成半截 JSON 导致下次启动加载失败。
     """
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-    CONFIG_FILE.write_text(
-        json.dumps(asdict(cfg), ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
+    payload = json.dumps(asdict(cfg), ensure_ascii=False, indent=2)
+    tmp_file = CONFIG_FILE.with_suffix(CONFIG_FILE.suffix + ".tmp")
+    tmp_file.write_text(payload, encoding="utf-8")
+    # ``Path.replace`` 在 Windows 上也是原子的（覆盖目标文件）。
+    tmp_file.replace(CONFIG_FILE)

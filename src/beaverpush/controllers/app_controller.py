@@ -16,7 +16,7 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import QObject, QTimer, Qt
+from PySide6.QtCore import QObject, QTimer, Qt, Signal
 from PySide6.QtWidgets import QApplication, QSystemTrayIcon, QMenu
 from PySide6.QtGui import QAction, QCloseEvent, QIcon, QPixmap
 
@@ -29,7 +29,9 @@ from ..services.device_service import (
 )
 from ..services.ffmpeg_service import check_rtsp_server_reachable
 from ..services.connectivity_service import ConnectivityCheckWorker
+from ..services.encoder_probe import detect_available_encoders
 from ..views.main_window import MainWindow
+from ..views import stream_card as stream_card_module
 from ..views.stream_card import StreamCardView
 from .stream_controller import StreamController
 from ..services.log_service import logger
@@ -45,6 +47,9 @@ class AppController(QObject):
         app: QApplication 实例（用于退出）。
         parent: 父 QObject。
     """
+
+    # 后台编码器探测完成后，把结果安全地回传到 UI 线程应用。
+    codecs_detected = Signal(list)
 
     def __init__(self, window: MainWindow, app: QApplication,
                  parent: QObject | None = None):
@@ -64,9 +69,20 @@ class AppController(QObject):
         self._test_worker: ConnectivityCheckWorker | None = None
         # 加载配置过程中跳过自动保存，避免在恢复期间反复写盘。
         self._loading_config: bool = False
+        self.codecs_detected.connect(
+            self._apply_detected_codecs, Qt.ConnectionType.QueuedConnection,
+        )
 
         # 获取主板 UUID 作为默认设备名
         self._default_machine_name = get_motherboard_uuid()
+
+        # 探测当前机器实际可用的编码器，UI 中只展示这些编码器，
+        # 避免选了 nvenc/qsv 但硬件不支持时启动后才报错。
+        # 探测会拉起若干次 ffmpeg 子进程，可能耗时数百毫秒到数秒，
+        # 所以推迟到事件循环开始后执行；探测完成后既更新模块级默认值，
+        # 也回写到已经创建好的卡片，避免“当前机器没有 QSV，但恢复出来的
+        # 已有卡片仍显示 qsv 选项”的 UI 残留。
+        QTimer.singleShot(0, self._detect_and_apply_codecs)
 
         # 同步初始状态到 View
         self._window.set_server(self._rtsp_server)
@@ -137,6 +153,49 @@ class AppController(QObject):
 
     def _on_server_reconnect_max_attempts_changed(self, value: str):
         self._server_reconnect_max_attempts = self._parse_non_negative_int(value, 0)
+
+    def _detect_and_apply_codecs(self):
+        """异步在后台线程探测可用编码器并应用到 UI。
+
+        放在后台线程是为了避免「启动后窗口先空白显示一段时间」——若在主
+        线程直接执行探测，``detect_available_encoders()`` 内部要拉起若干个
+        ffmpeg 子进程，在主事件循环里阻塞数百毫秒到 1 秒，正好对应用户
+        看到的“空白窗口”。
+
+        当前实现为：
+            * 后台 ``threading.Thread`` 跑探测；
+            * 探测完成后通过 ``codecs_detected`` Signal 把结果投递回 UI 线程；
+            * 再由 UI 线程修改 ``stream_card`` 的下拉框（保证只在 UI 线程动
+              UI 状态）。
+        """
+        import threading
+
+        def _worker():
+            try:
+                codecs = detect_available_encoders()
+            except Exception:
+                logger.exception("编码器探测失败，回退使用全部编码器选项")
+                codecs = []
+            # 用户可能在探测期间关闭主窗口，此时 self 这个 QObject
+            # 已经被销毁，emit 会抛出 RuntimeError 让进程崩溃。
+            try:
+                self.codecs_detected.emit(codecs)
+            except RuntimeError:
+                pass
+
+        threading.Thread(
+            target=_worker, name="encoder-probe", daemon=True,
+        ).start()
+
+    def _apply_detected_codecs(self, codecs: list[str]):
+        """在 UI 线程把探测结果应用到 ``stream_card`` 模块级配置。"""
+        if codecs:
+            stream_card_module.set_available_codecs(codecs)
+            for ctrl in self._controllers:
+                ctrl.card.refresh_available_codecs()
+            logger.info("可用编码器: {}", codecs)
+        else:
+            logger.warning("未探测到任何可用编码器，保留默认编码器选项")
 
     def _on_start_all(self):
         """全部开始推流。"""
@@ -487,12 +546,18 @@ class AppController(QObject):
         # 加载完成后刷新一次序号/移动按钮状态
         self._refresh_card_positions()
 
-        # 延迟启动，确保所有 UI 就绪
+        # 延迟启动，确保所有 UI 就绪；并按 ~250ms 间隔逐个启动而不是
+        # 一口气全部并发，避免：
+        #   1) 多路编码器同时初始化抢 GPU/CPU，
+        #   2) 主线程在循环里同步执行 ``probe_hikcamera_size`` / ``Popen``
+        #      等阻塞调用造成 UI 长时间卡死。
         if auto_start_ctrls:
-            QTimer.singleShot(
-                500,
-                lambda ctrls=auto_start_ctrls: [c.start_stream() for c in ctrls],
-            )
+            stagger_ms = 250
+            for i, c in enumerate(auto_start_ctrls):
+                QTimer.singleShot(
+                    500 + i * stagger_ms,
+                    lambda ctrl=c: ctrl.start_stream(),
+                )
 
     # ==================================================================
     #  系统托盘

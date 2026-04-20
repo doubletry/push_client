@@ -31,6 +31,45 @@ def _app_dir() -> str:
     return os.path.dirname(os.path.abspath(sys.argv[0]))
 
 
+def _candidate_roots() -> list[str]:
+    """枚举可能放置内嵌 ``ffmpeg/`` 的根目录，按优先级排序。
+
+    依次尝试：
+
+    1. ``sys.argv[0]`` 所在目录 —— 打包后即 exe 同级目录。
+    2. ``sys.argv[0]`` 向上若干层 —— 兼容开发模式从 ``src/beaverpush/main.py``
+       启动时，项目根 ``<repo>/ffmpeg/`` 才是真正放二进制的地方。
+    3. 当前工作目录 —— 用户在仓库根目录手动启动时也能命中。
+    4. 本模块文件向上若干层 —— 兜底覆盖 ``uv run`` / ``python -m`` 等
+       ``sys.argv[0]`` 不指向项目目录的启动方式。
+
+    去重后保持插入顺序，避免重复 stat。
+    """
+    roots: list[str] = []
+
+    def _add(p: str) -> None:
+        try:
+            real = os.path.abspath(p)
+        except Exception:
+            return
+        if real and real not in roots:
+            roots.append(real)
+
+    argv0_dir = _app_dir()
+    _add(argv0_dir)
+    for up in (1, 2, 3):
+        _add(os.path.join(argv0_dir, *([".."] * up)))
+
+    _add(os.getcwd())
+
+    here = os.path.dirname(os.path.abspath(__file__))
+    for up in (2, 3, 4):
+        # services/ → beaverpush/ → src/ → <repo>
+        _add(os.path.join(here, *([".."] * up)))
+
+    return roots
+
+
 def _find_executable(name: str) -> str:
     """查找可执行文件的完整路径。
 
@@ -41,25 +80,28 @@ def _find_executable(name: str) -> str:
         完整路径字符串。如果在内嵌目录和 PATH 中都找不到，
         则返回原始 ``name``，让后续 ``subprocess`` 抛出
         ``FileNotFoundError``。
+
+    内嵌优先级最高，避免用户 ``PATH`` 上的旧 ffmpeg（与新 NVIDIA 驱动
+    NVENC SDK 不兼容、preset 列表过时等）让硬件加速整体不可用。
     """
     exe_name = f"{name}.exe" if os.name == "nt" else name
 
-    # 1. 程序目录下的 ffmpeg/ 子目录
-    app_bundled = os.path.join(_app_dir(), "ffmpeg", exe_name)
-    if os.path.isfile(app_bundled):
-        return app_bundled
+    for root in _candidate_roots():
+        # 1) <root>/ffmpeg/<exe>  ——常规内嵌目录
+        bundled = os.path.join(root, "ffmpeg", exe_name)
+        if os.path.isfile(bundled):
+            return bundled
+        # 2) <root>/<exe>         ——有些用户直接放同级目录
+        same = os.path.join(root, exe_name)
+        if os.path.isfile(same):
+            return same
 
-    # 2. 程序目录本身（有些用户直接放在同目录）
-    app_same_dir = os.path.join(_app_dir(), exe_name)
-    if os.path.isfile(app_same_dir):
-        return app_same_dir
-
-    # 3. 系统 PATH
+    # 3) 系统 PATH —— 仅在没有任何内嵌副本时才使用
     found = shutil.which(name)
     if found:
         return found
 
-    # 4. 回退：返回原始名字，让 subprocess 报错
+    # 4) 回退：返回原始名字，让 subprocess 报错
     return name
 
 

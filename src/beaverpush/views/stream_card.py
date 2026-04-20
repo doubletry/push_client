@@ -30,15 +30,36 @@ from .theme import Theme
 
 # ── 视频源类型常量（key → 显示文本）──
 SOURCE_TYPES: list[tuple[str, str]] = [
-    ("video",  "本地视频"),
-    ("camera", "本地摄像头"),
-    ("rtsp",   "RTSP 源"),
-    ("screen", "全屏画面"),
-    ("window", "应用窗口"),
+    ("video",     "本地视频"),
+    ("camera",    "本地摄像头"),
+    ("rtsp",      "RTSP 源"),
+    ("screen",    "全屏画面"),
+    ("window",    "应用窗口"),
+    ("hikcamera", "海康工业相机"),
 ]
 
 # ── 编码器选项 ──
-CODEC_OPTIONS: list[str] = ["自动", "copy", "libx264", "libx265", "h264_nvenc", "hevc_nvenc"]
+# 默认包含全部可能的编码器；运行时由 :func:`set_available_codecs` 根据硬件
+# 探测结果裁剪（不可用的硬件编码器会被移除，避免用户选了之后启动失败）。
+ALL_CODEC_OPTIONS: list[str] = [
+    "自动", "copy",
+    "libx264", "libx265",
+    "h264_nvenc", "hevc_nvenc",
+    "h264_qsv", "hevc_qsv",
+]
+CODEC_OPTIONS: list[str] = ALL_CODEC_OPTIONS[:]
+
+
+def set_available_codecs(available: list[str]) -> None:
+    """根据硬件探测结果裁剪 :data:`CODEC_OPTIONS`。
+
+    * 始终保留 ``"自动"`` 与 ``"copy"`` 两个非编码器选项。
+    * 顺序按 :data:`ALL_CODEC_OPTIONS` 原始顺序保留，便于下拉框稳定。
+    * 必须在创建 :class:`StreamCardView` 之前调用才能影响新建的卡片。
+    """
+    global CODEC_OPTIONS
+    keep = set(available) | {"自动", "copy"}
+    CODEC_OPTIONS = [c for c in ALL_CODEC_OPTIONS if c in keep]
 
 
 class StreamCardView(QFrame):
@@ -524,27 +545,27 @@ class StreamCardView(QFrame):
     def _on_source_type_changed(self, idx: int):
         """源类型切换时更新 UI 可见性并发出信号。"""
         key = self._source_type_combo.itemData(idx)
-        is_file_or_rtsp = key in ("video", "rtsp")
+        is_text_input = key in ("video", "rtsp", "hikcamera")
         is_device = key in ("camera", "screen", "window")
 
         # 保存当前源类型的输入值（在切换前）
         prev_key = getattr(self, "_current_source_type", None)
-        if prev_key and prev_key in ("video", "rtsp"):
+        if prev_key and prev_key in ("video", "rtsp", "hikcamera"):
             self._source_paths_cache[prev_key] = self._source_input.text()
 
         # 切换输入 / 设备下拉框
-        self._source_input.setVisible(is_file_or_rtsp)
+        self._source_input.setVisible(is_text_input)
         self._device_combo.setVisible(is_device)
         self._browse_btn.setVisible(key == "video")
         self._refresh_btn.setVisible(is_device)
         self._loop_check.setVisible(key == "video")
 
-        # 重连配置仅对 RTSP 视频源有效
-        self._reconnect_container.setVisible(key == "rtsp")
+        # 重连配置对 RTSP 源 和 海康相机 都有效（断线后会按相同机制重连）
+        self._reconnect_container.setVisible(key in ("rtsp", "hikcamera"))
 
         # 恢复之前保存的源路径（而不是清空）
         self._source_input.blockSignals(True)
-        if key in ("video", "rtsp"):
+        if is_text_input:
             cached = self._source_paths_cache.get(key, "")
             self._source_input.setText(cached)
         else:
@@ -559,6 +580,8 @@ class StreamCardView(QFrame):
             self._source_input.setPlaceholderText("视频文件路径")
         elif key == "rtsp":
             self._source_input.setPlaceholderText("RTSP 地址")
+        elif key == "hikcamera":
+            self._source_input.setPlaceholderText("海康相机 SN，例如：00DA1234567")
 
         self._current_source_type = key
         self.source_type_changed.emit(key)
@@ -651,6 +674,33 @@ class StreamCardView(QFrame):
         idx = self._codec_combo.findText(codec)
         if idx >= 0:
             self._codec_combo.setCurrentIndex(idx)
+
+    def refresh_available_codecs(self):
+        """把当前全局 ``CODEC_OPTIONS`` 同步到本卡片的编码器下拉框。
+
+        主要用于启动后异步完成硬件探测时，刷新那些已经创建好的卡片。
+        若当前选中的编码器已被裁剪，则回退到 ``"自动"``（若存在），
+        否则回退到下拉框第一个选项。
+        """
+        current = self._codec_combo.currentText()
+        items = [self._codec_combo.itemText(i) for i in range(self._codec_combo.count())]
+        if items == CODEC_OPTIONS:
+            return
+
+        fallback = current
+        if fallback not in CODEC_OPTIONS:
+            fallback = "自动" if "自动" in CODEC_OPTIONS else (
+                CODEC_OPTIONS[0] if CODEC_OPTIONS else ""
+            )
+
+        self._codec_combo.blockSignals(True)
+        self._codec_combo.clear()
+        self._codec_combo.addItems(CODEC_OPTIONS)
+        if fallback:
+            idx = self._codec_combo.findText(fallback)
+            if idx >= 0:
+                self._codec_combo.setCurrentIndex(idx)
+        self._codec_combo.blockSignals(False)
 
     def get_width(self) -> str:
         return self._width_input.text()
