@@ -62,6 +62,8 @@ class AppController(QObject):
         self._controllers: list[StreamController] = []
         self._tray: QSystemTrayIcon | None = None
         self._test_worker: ConnectivityCheckWorker | None = None
+        # 加载配置过程中跳过自动保存，避免在恢复期间反复写盘。
+        self._loading_config: bool = False
 
         # 获取主板 UUID 作为默认设备名
         self._default_machine_name = get_motherboard_uuid()
@@ -258,9 +260,16 @@ class AppController(QObject):
         card.source_type_changed.connect(
             lambda key: self._refresh_devices(key, card)
         )
+        # 上下移动卡片
+        card.move_up_clicked.connect(lambda: self._move_stream(ctrl, -1))
+        card.move_down_clicked.connect(lambda: self._move_stream(ctrl, +1))
+        # 点击"开始推流"立即自动保存配置（不论后续推流是否成功）
+        card.start_clicked.connect(self._autosave)
 
         logger.info("添加推流通道 #{}", channel_index + 1)
         self._window.set_status(f"已添加推流通道，共 {len(self._controllers)} 路")
+        self._refresh_card_positions()
+        self._autosave()
         return ctrl
 
     def _remove_stream(self, ctrl: StreamController):
@@ -280,6 +289,8 @@ class AppController(QObject):
         self._window.set_status(f"已移除推流通道，剩余 {len(self._controllers)} 路")
         # 更新未设置流名称的通道的 placeholder
         self._update_stream_name_placeholders()
+        self._refresh_card_positions()
+        self._autosave()
 
     def _update_stream_name_placeholders(self):
         """为所有未设置流名称的通道更新 placeholder（stream1, stream2, ...）。
@@ -292,6 +303,58 @@ class AppController(QObject):
             ctrl.card.set_stream_name_placeholder(default_name)
             ctrl.set_default_stream_name(default_name)
             idx += 1
+
+    def _refresh_card_positions(self):
+        """刷新所有卡片的位置序号徽标与上下移动按钮的可用状态。"""
+        n = len(self._controllers)
+        for i, ctrl in enumerate(self._controllers):
+            ctrl.card.set_position_index(i)
+            ctrl.card.set_move_buttons_enabled(can_up=i > 0, can_down=i < n - 1)
+
+    def _move_stream(self, ctrl: StreamController, delta: int):
+        """在卡片列表中将指定通道上移或下移一位。
+
+        Args:
+            ctrl:  目标通道控制器。
+            delta: ``-1`` 表示上移，``+1`` 表示下移。
+
+        推流中的通道不允许移动，行为与"移除"按钮一致。
+        """
+        if delta not in (-1, 1):
+            return
+        if ctrl.is_streaming:
+            self._window.set_status("请先停止推流再移动")
+            return
+        if ctrl not in self._controllers:
+            return
+        old_index = self._controllers.index(ctrl)
+        new_index = old_index + delta
+        if new_index < 0 or new_index >= len(self._controllers):
+            return
+        # 同步移动 UI 卡片
+        if not self._window.move_card(ctrl.card, delta):
+            return
+        # 同步移动 controller 列表
+        self._controllers.pop(old_index)
+        self._controllers.insert(new_index, ctrl)
+        logger.info(
+            "移动推流通道：通道 #{} 从位置 {} 移动到位置 {}",
+            ctrl.channel_index + 1, old_index + 1, new_index + 1,
+        )
+        self._window.set_status(
+            f"已将卡片从位置 {old_index + 1} 移动到位置 {new_index + 1}"
+        )
+        self._refresh_card_positions()
+        self._autosave()
+
+    def _autosave(self):
+        """自动保存当前配置（加载阶段不保存，且不覆盖状态栏文案）。"""
+        if self._loading_config:
+            return
+        try:
+            self.save_config(update_status=False)
+        except Exception:
+            logger.exception("自动保存配置失败")
 
     def _get_all_effective_stream_names(self) -> list[str]:
         """获取所有通道的有效流名称（含默认名称）。"""
@@ -371,7 +434,7 @@ class AppController(QObject):
     #  配置持久化
     # ==================================================================
 
-    def save_config(self):
+    def save_config(self, *, update_status: bool = True):
         """保存当前所有通道配置到文件。"""
         self._server_locked = self._window.get_server_locked()
         cfg = AppConfig(
@@ -388,7 +451,8 @@ class AppController(QObject):
             cfg.add_stream(ctrl.to_config())
         save_config(cfg)
         logger.info("配置已保存，共 {} 路通道", len(cfg.streams))
-        self._window.set_status("配置已保存")
+        if update_status:
+            self._window.set_status("配置已保存")
 
     def _load_saved_config(self):
         """从文件加载已保存的通道配置。
@@ -402,19 +466,26 @@ class AppController(QObject):
 
         auto_start_ctrls: list = []
 
-        for stream_data in self._config.streams:
-            try:
-                cfg = load_stream_config(stream_data)
-                ctrl = self.add_stream()
-                ctrl.from_config(cfg)
-                # 如果是设备类型，自动刷新设备列表
-                if cfg.source_type in ("camera", "screen", "window"):
-                    self._refresh_devices(cfg.source_type, ctrl.card)
-                # 记录需要自动启动的通道
-                if cfg.auto_start:
-                    auto_start_ctrls.append(ctrl)
-            except Exception:
-                logger.exception("加载通道配置失败: {}", stream_data)
+        self._loading_config = True
+        try:
+            for stream_data in self._config.streams:
+                try:
+                    cfg = load_stream_config(stream_data)
+                    ctrl = self.add_stream()
+                    ctrl.from_config(cfg)
+                    # 如果是设备类型，自动刷新设备列表
+                    if cfg.source_type in ("camera", "screen", "window"):
+                        self._refresh_devices(cfg.source_type, ctrl.card)
+                    # 记录需要自动启动的通道
+                    if cfg.auto_start:
+                        auto_start_ctrls.append(ctrl)
+                except Exception:
+                    logger.exception("加载通道配置失败: {}", stream_data)
+        finally:
+            self._loading_config = False
+
+        # 加载完成后刷新一次序号/移动按钮状态
+        self._refresh_card_positions()
 
         # 延迟启动，确保所有 UI 就绪
         if auto_start_ctrls:

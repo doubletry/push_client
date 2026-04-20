@@ -134,3 +134,97 @@ class TestSourcePathsCache:
         finally:
             card.deleteLater()
             app.processEvents()
+
+
+class TestPositionBadge:
+    """验证卡片左上角的序号徽标。"""
+
+    def test_initial_badge_text(self):
+        app = QApplication.instance() or QApplication([])
+        card = StreamCardView(2)
+        try:
+            assert card._position_badge.text() == "#3"
+            assert card.get_position_index() == 2
+        finally:
+            card.deleteLater()
+            app.processEvents()
+
+    def test_set_position_index_updates_badge(self):
+        app = QApplication.instance() or QApplication([])
+        card = StreamCardView(0)
+        try:
+            card.set_position_index(4)
+            assert card._position_badge.text() == "#5"
+            assert card.get_position_index() == 4
+        finally:
+            card.deleteLater()
+            app.processEvents()
+
+    def test_set_position_index_ignores_negative(self):
+        app = QApplication.instance() or QApplication([])
+        card = StreamCardView(0)
+        try:
+            card.set_position_index(-1)
+            assert card._position_badge.text() == "#1"
+        finally:
+            card.deleteLater()
+            app.processEvents()
+
+
+class TestMoveButtons:
+    """验证卡片右下角的上下移动按钮。"""
+
+    def test_move_buttons_disabled_by_default(self):
+        app = QApplication.instance() or QApplication([])
+        card = StreamCardView(0)
+        try:
+            assert not card._move_up_btn.isEnabled()
+            assert not card._move_down_btn.isEnabled()
+        finally:
+            card.deleteLater()
+            app.processEvents()
+
+    def test_set_move_buttons_enabled_applies_flags(self):
+        app = QApplication.instance() or QApplication([])
+        card = StreamCardView(0)
+        try:
+            card.set_move_buttons_enabled(can_up=True, can_down=False)
+            assert card._move_up_btn.isEnabled()
+            assert not card._move_down_btn.isEnabled()
+            card.set_move_buttons_enabled(can_up=False, can_down=True)
+            assert not card._move_up_btn.isEnabled()
+            assert card._move_down_btn.isEnabled()
+        finally:
+            card.deleteLater()
+            app.processEvents()
+
+    def test_streaming_disables_move_buttons(self):
+        app = QApplication.instance() or QApplication([])
+        card = StreamCardView(0)
+        try:
+            card.set_move_buttons_enabled(can_up=True, can_down=True)
+            card.set_buttons_streaming(True)
+            assert not card._move_up_btn.isEnabled()
+            assert not card._move_down_btn.isEnabled()
+            # 停止推流后恢复
+            card.set_buttons_streaming(False)
+            assert card._move_up_btn.isEnabled()
+            assert card._move_down_btn.isEnabled()
+        finally:
+            card.deleteLater()
+            app.processEvents()
+
+    def test_move_up_button_emits_signal(self):
+        app = QApplication.instance() or QApplication([])
+        card = StreamCardView(0)
+        try:
+            card.set_move_buttons_enabled(can_up=True, can_down=True)
+            received = []
+            card.move_up_clicked.connect(lambda: received.append("up"))
+            card.move_down_clicked.connect(lambda: received.append("down"))
+            card._move_up_btn.click()
+            card._move_down_btn.click()
+            assert received == ["up", "down"]
+        finally:
+            card.deleteLater()
+            app.processEvents()

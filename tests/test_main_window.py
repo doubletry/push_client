@@ -31,3 +31,50 @@ def test_auth_secret_stays_masked():
     finally:
         window.deleteLater()
         app.processEvents()
+
+
+def test_move_card_swaps_order_in_list_and_layout():
+    app = QApplication.instance() or QApplication([])
+    from beaverpush.views.stream_card import StreamCardView
+    window = MainWindow()
+    try:
+        c0 = StreamCardView(0, window)
+        c1 = StreamCardView(1, window)
+        c2 = StreamCardView(2, window)
+        window.add_card(c0)
+        window.add_card(c1)
+        window.add_card(c2)
+
+        assert window.get_cards() == [c0, c1, c2]
+        # 下移第一张
+        assert window.move_card(c0, +1) is True
+        assert window.get_cards() == [c1, c0, c2]
+        # 上移最后一张
+        assert window.move_card(c2, -1) is True
+        assert window.get_cards() == [c1, c2, c0]
+
+        # layout 顺序应与 _cards 一致（layout 中索引偏移 1，因 empty_label 在 0 位）
+        layout = window._cards_layout
+        for i, card in enumerate(window.get_cards()):
+            assert layout.itemAt(i + 1).widget() is card
+    finally:
+        window.deleteLater()
+        app.processEvents()
+
+
+def test_move_card_at_boundaries_returns_false():
+    app = QApplication.instance() or QApplication([])
+    from beaverpush.views.stream_card import StreamCardView
+    window = MainWindow()
+    try:
+        c0 = StreamCardView(0, window)
+        c1 = StreamCardView(1, window)
+        window.add_card(c0)
+        window.add_card(c1)
+
+        assert window.move_card(c0, -1) is False  # 第一张不能上移
+        assert window.move_card(c1, +1) is False  # 最后一张不能下移
+        assert window.get_cards() == [c0, c1]
+    finally:
+        window.deleteLater()
+        app.processEvents()
