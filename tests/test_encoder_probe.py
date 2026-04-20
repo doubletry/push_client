@@ -141,12 +141,71 @@ class TestProbeEncoder:
             assert encoder_probe._probe_encoder("hevc_qsv") is False
 
 
-class TestDetectAvailableEncoders:
+class TestClassifyGpuVendor:
+    def test_intel(self):
+        assert encoder_probe._classify_gpu_vendor("Intel(R) UHD Graphics 770") == "intel"
+
+    def test_nvidia(self):
+        assert encoder_probe._classify_gpu_vendor("NVIDIA GeForce RTX 4070") == "nvidia"
+        assert encoder_probe._classify_gpu_vendor("Quadro P2000") == "nvidia"
+
+    def test_amd(self):
+        assert encoder_probe._classify_gpu_vendor("AMD Radeon RX 6800") == "amd"
+
+    def test_unknown(self):
+        assert encoder_probe._classify_gpu_vendor("Microsoft Basic Display Adapter") is None
+
+
+class TestDetectGpuVendorsLinux:
+    def test_xeon_w5_no_gpu_returns_empty_set(self):
+        """Xeon W5-3545 + 无独显场景：lspci 输出里没有任何显示控制器行。"""
+        lspci_stdout = (
+            "00:00.0 Host bridge: Intel Corporation Device 1234\n"
+            "00:1f.0 ISA bridge: Intel Corporation Device 5678\n"
+        )
+        with mock.patch(
+            "beaverpush.services.encoder_probe.subprocess.run",
+            return_value=_fake_completed(stdout=lspci_stdout),
+        ):
+            assert encoder_probe._detect_gpu_vendors_linux(timeout=5.0) == set()
+
+    def test_nvidia_only(self):
+        lspci_stdout = (
+            "01:00.0 VGA compatible controller: NVIDIA Corporation GA104 [GeForce RTX 3070]\n"
+        )
+        with mock.patch(
+            "beaverpush.services.encoder_probe.subprocess.run",
+            return_value=_fake_completed(stdout=lspci_stdout),
+        ):
+            assert encoder_probe._detect_gpu_vendors_linux(timeout=5.0) == {"nvidia"}
+
+    def test_intel_plus_nvidia(self):
+        lspci_stdout = (
+            "00:02.0 VGA compatible controller: Intel Corporation UHD Graphics 770\n"
+            "01:00.0 3D controller: NVIDIA Corporation GA107M [GeForce RTX 3050 Mobile]\n"
+        )
+        with mock.patch(
+            "beaverpush.services.encoder_probe.subprocess.run",
+            return_value=_fake_completed(stdout=lspci_stdout),
+        ):
+            assert encoder_probe._detect_gpu_vendors_linux(timeout=5.0) == {"intel", "nvidia"}
+
+    def test_lspci_missing_returns_none(self):
+        with mock.patch(
+            "beaverpush.services.encoder_probe.subprocess.run",
+            side_effect=FileNotFoundError(),
+        ):
+            assert encoder_probe._detect_gpu_vendors_linux(timeout=5.0) is None
+
+
+
     def test_only_software_when_no_hardware(self):
         # 软件 + 硬件编码器都在 listing 中；硬件实际探测全部失败
         all_listed = set(encoder_probe.SOFTWARE_ENCODERS) | set(encoder_probe.HARDWARE_ENCODERS)
         with mock.patch.object(
             encoder_probe, "_list_ffmpeg_encoders", return_value=all_listed,
+        ), mock.patch.object(
+            encoder_probe, "detect_gpu_vendors", return_value=None,
         ), mock.patch.object(
             encoder_probe, "_probe_encoder", return_value=False,
         ):
@@ -160,6 +219,9 @@ class TestDetectAvailableEncoders:
         all_listed = set(encoder_probe.SOFTWARE_ENCODERS) | set(encoder_probe.HARDWARE_ENCODERS)
         with mock.patch.object(
             encoder_probe, "_list_ffmpeg_encoders", return_value=all_listed,
+        ), mock.patch.object(
+            # 让 vendors 检查不裁剪：返回 None 表示无法判定时回退到 probe 行为
+            encoder_probe, "detect_gpu_vendors", return_value=None,
         ), mock.patch.object(
             encoder_probe, "_probe_encoder",
             side_effect=lambda name: name in ("h264_qsv", "hevc_qsv"),
@@ -175,10 +237,68 @@ class TestDetectAvailableEncoders:
         with mock.patch.object(
             encoder_probe, "_list_ffmpeg_encoders", return_value=listed,
         ), mock.patch.object(
+            encoder_probe, "detect_gpu_vendors", return_value=None,
+        ), mock.patch.object(
             encoder_probe, "_probe_encoder", return_value=True,
         ):
             result = encoder_probe.detect_available_encoders()
         assert result == ["libx264"]
+
+    def test_no_intel_gpu_skips_qsv_even_if_probe_would_pass(self):
+        """关键回归：无 Intel iGPU 的机器（例如 Xeon W5-3545）即使 ffmpeg 内置
+        了 QSV 编码器、即使 1 帧 testsrc probe 通过 libmfx 软件回退能成功，
+        也不应该把 QSV 暴露到 UI；同时 NVIDIA-only 时仍能正常列出 nvenc。
+        """
+        all_listed = set(encoder_probe.SOFTWARE_ENCODERS) | set(encoder_probe.HARDWARE_ENCODERS)
+        probe_calls: list[str] = []
+
+        def fake_probe(name: str) -> bool:
+            probe_calls.append(name)
+            return True  # 模拟 libmfx 软件回退导致的“假成功”
+
+        with mock.patch.object(
+            encoder_probe, "_list_ffmpeg_encoders", return_value=all_listed,
+        ), mock.patch.object(
+            encoder_probe, "detect_gpu_vendors", return_value={"nvidia"},
+        ), mock.patch.object(
+            encoder_probe, "_probe_encoder", side_effect=fake_probe,
+        ):
+            result = encoder_probe.detect_available_encoders()
+        assert "h264_qsv" not in result
+        assert "hevc_qsv" not in result
+        assert "h264_nvenc" in result
+        assert "hevc_nvenc" in result
+        # 既然 vendor 已经判明无 Intel，就不应该再去为 QSV 启动 ffmpeg 子进程
+        assert "h264_qsv" not in probe_calls
+        assert "hevc_qsv" not in probe_calls
+
+    def test_no_gpu_at_all_strips_all_hardware_encoders(self):
+        all_listed = set(encoder_probe.SOFTWARE_ENCODERS) | set(encoder_probe.HARDWARE_ENCODERS)
+        with mock.patch.object(
+            encoder_probe, "_list_ffmpeg_encoders", return_value=all_listed,
+        ), mock.patch.object(
+            encoder_probe, "detect_gpu_vendors", return_value=set(),
+        ), mock.patch.object(
+            encoder_probe, "_probe_encoder", return_value=True,
+        ):
+            result = encoder_probe.detect_available_encoders()
+        for hw in encoder_probe.HARDWARE_ENCODERS:
+            assert hw not in result
+
+    def test_vendor_detection_unknown_falls_back_to_probe(self):
+        all_listed = set(encoder_probe.SOFTWARE_ENCODERS) | set(encoder_probe.HARDWARE_ENCODERS)
+        with mock.patch.object(
+            encoder_probe, "_list_ffmpeg_encoders", return_value=all_listed,
+        ), mock.patch.object(
+            encoder_probe, "detect_gpu_vendors", return_value=None,
+        ), mock.patch.object(
+            encoder_probe, "_probe_encoder",
+            side_effect=lambda name: name == "h264_nvenc",
+        ):
+            result = encoder_probe.detect_available_encoders()
+        assert "h264_nvenc" in result
+        assert "hevc_nvenc" not in result
+        assert "h264_qsv" not in result
 
     def test_listing_subprocess_called_only_once(self):
         """关键性能保证：哪怕有 6 个候选编码器，也只能调用一次 ffmpeg -encoders。"""
