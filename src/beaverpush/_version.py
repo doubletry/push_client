@@ -28,7 +28,7 @@ def _read_bundled_version() -> str:
     version_file = _get_assets_dir() / "version.txt"
     if not version_file.is_file():
         return ""
-    return version_file.read_text(encoding="utf-8").strip()
+    return version_file.read_text(encoding="utf-8-sig").strip()
 
 
 def _read_pyproject_version() -> str:
