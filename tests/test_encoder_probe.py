@@ -107,6 +107,32 @@ class TestProbeEncoder:
         # 关键回归：再也不能出现历史上那个非法的 ``hw_any`` 子设备名
         assert "hw_any" not in spec
 
+    def test_qsv_probe_uses_nv12_like_probe_source(self):
+        """QSV probe 不再走过小的 RGB ``testsrc`` + ``yuv420p`` 路径。
+
+        回归背景：真实用户在 UHD 770 上用命令行直接 ``-c:v hevc_qsv`` 转码正常，
+        但旧 probe 会先报 ``Incompatible pixel format 'yuv420p'``，随后
+        ``Error creating a MFX session: -9.``。这里要求 probe 改成更贴近
+        真实输入的 ``nv12`` 合成源。
+        """
+        captured = {}
+
+        def fake_run(cmd, **kwargs):
+            captured["cmd"] = list(cmd)
+            return _fake_completed(returncode=0)
+
+        with mock.patch(
+            "beaverpush.services.encoder_probe.subprocess.run",
+            side_effect=fake_run,
+        ):
+            ok, _, _ = encoder_probe._probe_encoder("hevc_qsv")
+            assert ok is True
+        cmd = captured["cmd"]
+        i_idx = cmd.index("-i")
+        assert "testsrc2=" in cmd[i_idx + 1]
+        assert "format=nv12" in cmd[i_idx + 1]
+        assert "-pix_fmt" not in cmd
+
     def test_qsv_probe_tries_no_longer_uses_hw_any(self):
         """所有平台、所有候选 spec 中都不能再包含 ``hw_any``。"""
         for spec in encoder_probe._qsv_device_specs():
@@ -162,6 +188,26 @@ class TestProbeEncoder:
         assert "-init_hw_device" in captured["cmd"]
         idx = captured["cmd"].index("-init_hw_device")
         assert captured["cmd"][idx + 1].startswith("cuda")
+
+    def test_nvenc_probe_keeps_yuv420p_path(self):
+        """QSV 的 probe 输入修正不能影响 NVENC 的既有防假阴性路径。"""
+        captured = {}
+
+        def fake_run(cmd, **kwargs):
+            captured["cmd"] = list(cmd)
+            return _fake_completed(returncode=0)
+
+        with mock.patch(
+            "beaverpush.services.encoder_probe.subprocess.run",
+            side_effect=fake_run,
+        ):
+            ok, _, _ = encoder_probe._probe_encoder("h264_nvenc")
+            assert ok is True
+        cmd = captured["cmd"]
+        i_idx = cmd.index("-i")
+        assert cmd[i_idx + 1] == "testsrc=duration=1:size=320x240:rate=1"
+        pix_idx = cmd.index("-pix_fmt")
+        assert cmd[pix_idx + 1] == "yuv420p"
 
     def test_software_probe_does_not_use_init_hw_device(self):
         captured = {}

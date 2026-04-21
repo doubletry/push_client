@@ -242,6 +242,31 @@ _HARDWARE_FAILURE_STDERR_MARKERS: tuple[str, ...] = (
 )
 
 
+def _probe_source_args(name: str) -> list[str]:
+    """返回探测该编码器时使用的输入源参数。
+
+    ``hevc_qsv`` 在部分 Intel + oneVPL / D3D11 驱动组合上，对过小的 RGB
+    ``testsrc`` + ``-pix_fmt yuv420p`` 路径比较敏感：ffmpeg 会先报
+    ``Incompatible pixel format 'yuv420p' ... auto-selecting format 'nv12'``，
+    随后直接以 ``Error creating a MFX session: -9.`` 失败；但用户对真实
+    ``nv12`` / ``yuv420p`` 视频源做命令行转码又是正常的。为了让 probe 更贴近
+    真正推流/转码路径，QSV 改用更常见的 720p30 ``nv12`` 合成源。
+
+    NVENC 则继续保留原来的 ``yuv420p`` 路径，避免重新引入历史上的
+    ``gbrp`` / High 4:4:4 假阴性。
+    """
+    if name.endswith("_qsv"):
+        return [
+            "-f", "lavfi",
+            "-i", "testsrc2=duration=1:size=1280x720:rate=30,format=nv12",
+        ]
+    return [
+        "-f", "lavfi",
+        "-i", "testsrc=duration=1:size=320x240:rate=1",
+        "-pix_fmt", "yuv420p",
+    ]
+
+
 def _probe_encoder(
     name: str,
     timeout: float = 8.0,
@@ -259,11 +284,12 @@ def _probe_encoder(
     NVIDIA GPU，对应的 device init 会失败，进程返回非零，从而避免出现
     "ffmpeg 内置了 QSV 但用户机器只有 N 卡也被探测为可用" 的误报。
 
-    注意 ``-pix_fmt yuv420p`` 是必须的：``testsrc`` 默认输出 ``rgb24`` →
-    libavfilter 自动 negotiate 成 ``gbrp``，会让 NVENC 走 ``High 4:4:4``
-    profile。这个 profile 在部分驱动/显卡组合下不被支持（或与并发会话冲突），
-    导致探测失败而误判 ``h264_nvenc`` 不可用；而真正推流时我们用的是
-    ``yuv420p`` 是受支持的，所以这里强制对齐成 ``yuv420p`` 才能反映真实可用性。
+    输入源也按编码器做了轻微区分：
+        * QSV：使用更接近真实视频输入的 ``testsrc2 ... format=nv12``；
+          这样可以避开某些 Intel 驱动对极小 RGB 测试图的假阴性。
+        * 其它编码器：继续用 ``testsrc`` + ``-pix_fmt yuv420p``。其中
+          ``yuv420p`` 对 NVENC 是必须的：默认 ``rgb24`` 经自动协商后容易
+          变成 ``gbrp``，触发 ``High 4:4:4`` profile，进而误判 nvenc 不可用。
     """
     # 选出该编码器要尝试的硬件设备规范候选；软件编码器为空 tuple 表示一次直跑。
     if name.endswith("_qsv"):
@@ -281,14 +307,8 @@ def _probe_encoder(
         cmd = [get_ffmpeg(), "-hide_banner", "-y"]
         if spec is not None:
             cmd += ["-init_hw_device", spec]
-        cmd += [
-            "-f", "lavfi",
-            "-i", "testsrc=duration=1:size=320x240:rate=1",
-            "-frames:v", "1",
-            "-pix_fmt", "yuv420p",
-            "-c:v", name,
-            "-f", "null", "-",
-        ]
+        cmd += _probe_source_args(name)
+        cmd += ["-frames:v", "1", "-c:v", name, "-f", "null", "-"]
         try:
             result = subprocess.run(
                 cmd,
