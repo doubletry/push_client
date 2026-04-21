@@ -39,12 +39,23 @@ jobs:
       - name: Download FFmpeg
         shell: pwsh
         run: |
-          $ffmpegUrl = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl-shared.zip"
+          $ffmpegVersion = "n8.1"
+          $ffmpegAssetName = "ffmpeg-n8.1-latest-win64-gpl-shared-8.1.zip"
+          $ffmpegAssetSha256 = "35bacc587f1803d701315c0461cc833125b03eeeca7e122ce97fe8d995708a6a"
+          $ffmpegUrl = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/$ffmpegAssetName"
           $zipPath = "$env:RUNNER_TEMP\ffmpeg.zip"
           $extractPath = "$env:RUNNER_TEMP\ffmpeg-extract"
 
-          Write-Host "Downloading FFmpeg (shared build)..."
+          Write-Host "Downloading FFmpeg $ffmpegVersion (shared build)..."
+          Write-Host "Source URL: $ffmpegUrl"
           Invoke-WebRequest -Uri $ffmpegUrl -OutFile $zipPath -UseBasicParsing
+
+          $actualZipSha256 = (Get-FileHash -Path $zipPath -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actualZipSha256 -ne $ffmpegAssetSha256) {
+            Write-Error "FFmpeg archive checksum mismatch. Expected $ffmpegAssetSha256, got $actualZipSha256"
+            exit 1
+          }
+          Write-Host "FFmpeg archive checksum verified: $actualZipSha256"
 
           Write-Host "Extracting FFmpeg..."
           Expand-Archive -Path $zipPath -DestinationPath $extractPath -Force
@@ -56,7 +67,31 @@ jobs:
             exit 1
           }
 
+          $versionLine = (& "$($binDir.FullName)\ffmpeg.exe" -version | Select-Object -First 1).Trim()
+          Write-Host "Detected FFmpeg version: $versionLine"
+          if ($versionLine -notmatch '^ffmpeg version n8\.1(?:[\s-]|$)') {
+            Write-Error "Unexpected FFmpeg version. Expected n8.1, got: $versionLine"
+            exit 1
+          }
+
+          $requiredFiles = @("ffmpeg.exe", "ffplay.exe", "ffprobe.exe")
+          foreach ($file in $requiredFiles) {
+            if (-not (Test-Path (Join-Path $binDir.FullName $file))) {
+              Write-Error "Required FFmpeg binary not found: $file"
+              exit 1
+            }
+          }
+
+          $dlls = Get-ChildItem -Path $binDir.FullName -Filter "*.dll" -File
+          if (-not $dlls) {
+            Write-Error "No FFmpeg shared DLLs were found in $($binDir.FullName)"
+            exit 1
+          }
+
           # Copy ffmpeg executables and shared libraries to project ffmpeg/ directory
+          if (Test-Path "ffmpeg") {
+            Remove-Item "ffmpeg" -Recurse -Force
+          }
           New-Item -ItemType Directory -Path "ffmpeg" -Force | Out-Null
           Copy-Item "$($binDir.FullName)\ffmpeg.exe" -Destination "ffmpeg\ffmpeg.exe"
           Copy-Item "$($binDir.FullName)\ffplay.exe" -Destination "ffmpeg\ffplay.exe"
