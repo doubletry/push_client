@@ -41,7 +41,7 @@ jobs:
         run: |
           $ffmpegVersion = "8.1"
           $ffmpegReleaseRepo = "GyanD/codexffmpeg"
-          $ffmpegAssetName = "ffmpeg-8.1-full_build-shared.zip"
+          $ffmpegAssetName = "ffmpeg-$ffmpegVersion-full_build-shared.zip"
           $ffmpegAssetSha256 = "e184e012ca9a3527ed45d61f8e250c50b07b8661d90849820ea754239049efb4"
           $ffmpegUrl = "https://github.com/$ffmpegReleaseRepo/releases/download/$ffmpegVersion/$ffmpegAssetName"
           $zipPath = "$env:RUNNER_TEMP\ffmpeg.zip"
