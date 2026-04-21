@@ -13,6 +13,7 @@
   #define MyAppVersion "0.1.0"
 #endif
 #ifndef MyAppVersionInfoVersion
+  ; Windows 版本资源要求四段数字格式，和展示给用户的 MyAppVersion 分开。
   #define MyAppVersionInfoVersion "0.1.0.0"
 #endif
 #define MyAppPublisher "Company, Inc."

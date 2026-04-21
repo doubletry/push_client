@@ -568,20 +568,30 @@ class AppController(QObject):
             )
 
     def _collect_startable_controllers(
-        self, controllers: list[StreamController],
+        self,
+        controllers: list[StreamController],
+        controller_ids: set[int] | None = None,
     ) -> list[StreamController]:
         """收集当前可启动的通道，保持原有顺序并去重。"""
         startable: list[StreamController] = []
         seen_ids: set[int] = set()
-        controller_ids = {id(ctrl) for ctrl in self._controllers}
+        valid_controller_ids = controller_ids or {id(ctrl) for ctrl in self._controllers}
         for ctrl in controllers:
             if id(ctrl) in seen_ids:
                 continue
             seen_ids.add(id(ctrl))
-            if id(ctrl) not in controller_ids or ctrl.is_streaming:
+            if id(ctrl) not in valid_controller_ids or ctrl.is_streaming:
                 continue
             startable.append(ctrl)
         return startable
+
+    def _get_pending_startable_controllers(self) -> list[StreamController]:
+        """返回批量启动队列中当前仍可启动的通道快照。"""
+        controller_ids = {id(ctrl) for ctrl in self._controllers}
+        return self._collect_startable_controllers(
+            self._bulk_start_queue,
+            controller_ids=controller_ids,
+        )
 
     def _queue_bulk_start(
         self,
@@ -605,15 +615,14 @@ class AppController(QObject):
 
     def _start_next_queued_stream(self):
         """启动队列中的下一路推流。"""
-        self._bulk_start_queue = self._collect_startable_controllers(
-            self._bulk_start_queue
-        )
-        if not self._bulk_start_queue:
+        pending = self._get_pending_startable_controllers()
+        if not pending:
             self._finish_bulk_start()
             return
 
-        self._bulk_start_total = self._bulk_start_started + len(self._bulk_start_queue)
-        ctrl = self._bulk_start_queue.pop(0)
+        self._bulk_start_total = self._bulk_start_started + len(pending)
+        ctrl = pending[0]
+        self._bulk_start_queue = pending[1:]
 
         current = self._bulk_start_started + 1
         self._window.set_status(

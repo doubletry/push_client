@@ -36,6 +36,9 @@ function Get-ProjectVersion {
 function Convert-ToWindowsVersion {
     param([string]$RawVersion)
 
+    # Windows 版本资源必须是纯数字的四段格式；若 tag/pyproject 使用
+    # semver 预发布或 build metadata（如 1.2.3-beta.1 / 1.2.3+5），这里
+    # 仅截取前面的核心版本号用于 EXE/Setup 的版本资源。
     $normalized = $RawVersion.Trim() -replace '[-+].*$', ''
     $parts = $normalized.Split(".")
     if ($parts.Count -gt 4) {

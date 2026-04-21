@@ -85,9 +85,16 @@ def test_help_content_includes_runtime_version(monkeypatch):
     app = QApplication.instance() or QApplication([])
     window = MainWindow()
     try:
-        monkeypatch.setattr(main_window_module, "get_app_version", lambda: "2.3.4")
+        calls: list[str] = []
+
+        def fake_get_app_version():
+            calls.append("called")
+            return "2.3.4"
+
+        monkeypatch.setattr(main_window_module, "get_app_version", fake_get_app_version)
         monkeypatch.setattr(window, "_load_help_content", lambda: "帮助正文")
         content = window._get_help_content()
+        assert calls == ["called"]
         assert content.startswith("当前版本: 2.3.4")
         assert content.endswith("帮助正文")
     finally:
