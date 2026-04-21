@@ -75,7 +75,7 @@ jobs:
           $versionLine = (& "$($binDir.FullName)\ffmpeg.exe" -version | Select-Object -First 1).Trim()
           Write-Host "Detected FFmpeg version: $versionLine"
           if ($versionLine -notmatch "^ffmpeg version $escapedFfmpegVersion(?:[\s-]|$)") {
-            Write-Error "Unexpected FFmpeg version. Expected n8.1, got: $versionLine"
+            Write-Error "Unexpected FFmpeg version. Expected $ffmpegVersion, got: $versionLine"
             exit 1
           }
 
