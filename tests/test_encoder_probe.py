@@ -18,6 +18,11 @@ def _fake_completed(returncode=0, stdout="", stderr=""):
     return cp
 
 
+def _probe_result(ok: bool, rc: int | None = None, stderr: str = ""):
+    """构造 _probe_encoder 的返回三元组，方便 mock 使用。"""
+    return (ok, rc if rc is not None else (0 if ok else 1), stderr)
+
+
 class TestFFmpegListsEncoder:
     def test_present_in_listing(self):
         listing = " V..... libx264              H.264\n V..... h264_nvenc           NVIDIA\n"
@@ -60,14 +65,18 @@ class TestProbeEncoder:
             "beaverpush.services.encoder_probe.subprocess.run",
             return_value=_fake_completed(returncode=0),
         ):
-            assert encoder_probe._probe_encoder("h264_qsv") is True
+            ok, _, _ = encoder_probe._probe_encoder("h264_qsv")
+            assert ok is True
 
     def test_failure_returncode(self):
         with mock.patch(
             "beaverpush.services.encoder_probe.subprocess.run",
-            return_value=_fake_completed(returncode=1),
+            return_value=_fake_completed(returncode=1, stderr="boom"),
         ):
-            assert encoder_probe._probe_encoder("h264_nvenc") is False
+            ok, rc, stderr = encoder_probe._probe_encoder("h264_nvenc")
+            assert ok is False
+            assert rc == 1
+            assert "boom" in stderr
 
     def test_timeout_treated_as_unavailable(self):
         import subprocess as sp
@@ -75,7 +84,8 @@ class TestProbeEncoder:
             "beaverpush.services.encoder_probe.subprocess.run",
             side_effect=sp.TimeoutExpired(cmd="ffmpeg", timeout=5),
         ):
-            assert encoder_probe._probe_encoder("h264_nvenc") is False
+            ok, _, _ = encoder_probe._probe_encoder("h264_nvenc")
+            assert ok is False
 
     def test_qsv_probe_uses_init_hw_device(self):
         captured = {}
@@ -88,10 +98,53 @@ class TestProbeEncoder:
             "beaverpush.services.encoder_probe.subprocess.run",
             side_effect=fake_run,
         ):
-            assert encoder_probe._probe_encoder("h264_qsv") is True
+            ok, _, _ = encoder_probe._probe_encoder("h264_qsv")
+            assert ok is True
         assert "-init_hw_device" in captured["cmd"]
         idx = captured["cmd"].index("-init_hw_device")
-        assert captured["cmd"][idx + 1].startswith("qsv=")
+        spec = captured["cmd"][idx + 1]
+        assert spec.startswith("qsv=")
+        # 关键回归：再也不能出现历史上那个非法的 ``hw_any`` 子设备名
+        assert "hw_any" not in spec
+
+    def test_qsv_probe_tries_no_longer_uses_hw_any(self):
+        """所有平台、所有候选 spec 中都不能再包含 ``hw_any``。"""
+        for spec in encoder_probe._qsv_device_specs():
+            assert "hw_any" not in spec, spec
+
+    def test_qsv_probe_tries_multiple_device_specs(self):
+        """第一条 spec 失败 (rc=1, ``device creation failed``)，
+        第二条成功——_probe_encoder 应整体判定为可用。
+        强制走 Windows 候选列表，保证 fallback 逻辑被覆盖。
+        """
+        calls: list[list[str]] = []
+
+        def fake_run(cmd, **kwargs):
+            calls.append(list(cmd))
+            if len(calls) == 1:
+                return _fake_completed(
+                    returncode=1,
+                    stderr="Device creation failed: -3.\n",
+                )
+            return _fake_completed(returncode=0)
+
+        # 直接 mock 候选列表，避免依赖宿主平台
+        win_specs = ("qsv=hw", "qsv=hw,child_device_type=d3d11va")
+        with mock.patch.object(
+            encoder_probe, "_qsv_device_specs", return_value=win_specs,
+        ), mock.patch(
+            "beaverpush.services.encoder_probe.subprocess.run",
+            side_effect=fake_run,
+        ):
+            ok, _, _ = encoder_probe._probe_encoder("h264_qsv")
+        assert ok is True
+        assert len(calls) == 2
+        # 第二次调用必须命中第二条 spec，证明确实换了规范而不是简单重试
+        assert "-init_hw_device" in calls[1]
+        idx0 = calls[0].index("-init_hw_device")
+        idx1 = calls[1].index("-init_hw_device")
+        assert calls[0][idx0 + 1] == "qsv=hw"
+        assert calls[1][idx1 + 1] == "qsv=hw,child_device_type=d3d11va"
 
     def test_nvenc_probe_uses_init_hw_device(self):
         captured = {}
@@ -104,7 +157,8 @@ class TestProbeEncoder:
             "beaverpush.services.encoder_probe.subprocess.run",
             side_effect=fake_run,
         ):
-            assert encoder_probe._probe_encoder("hevc_nvenc") is True
+            ok, _, _ = encoder_probe._probe_encoder("hevc_nvenc")
+            assert ok is True
         assert "-init_hw_device" in captured["cmd"]
         idx = captured["cmd"].index("-init_hw_device")
         assert captured["cmd"][idx + 1].startswith("cuda")
@@ -120,17 +174,21 @@ class TestProbeEncoder:
             "beaverpush.services.encoder_probe.subprocess.run",
             side_effect=fake_run,
         ):
-            assert encoder_probe._probe_encoder("libx264") is True
+            ok, _, _ = encoder_probe._probe_encoder("libx264")
+            assert ok is True
         assert "-init_hw_device" not in captured["cmd"]
 
     def test_returncode_zero_but_stderr_failure_marker_means_unavailable(self):
-        """某些 QSV 实现即使 device 创建失败仍以 0 退出，需要扫 stderr。"""
-        bad_stderr = "Device creation failed: -3.\nError initializing the MFX session\n"
+        """某些 QSV 实现即使 device 创建失败仍以 0 退出，需要扫 stderr。
+        使用我们保留的精确标记 ``Device creation failed``。
+        """
+        bad_stderr = "Device creation failed: -3.\n"
         with mock.patch(
             "beaverpush.services.encoder_probe.subprocess.run",
             return_value=_fake_completed(returncode=0, stderr=bad_stderr),
         ):
-            assert encoder_probe._probe_encoder("h264_qsv") is False
+            ok, _, _ = encoder_probe._probe_encoder("h264_qsv")
+            assert ok is False
 
     def test_returncode_zero_but_mfx_session_create_error_means_unavailable(self):
         bad_stderr = "[hevc_qsv @ 0000029d540c0440] Error creating a MFX session: -9.\n"
@@ -138,7 +196,25 @@ class TestProbeEncoder:
             "beaverpush.services.encoder_probe.subprocess.run",
             return_value=_fake_completed(returncode=0, stderr=bad_stderr),
         ):
-            assert encoder_probe._probe_encoder("hevc_qsv") is False
+            ok, _, _ = encoder_probe._probe_encoder("hevc_qsv")
+            assert ok is False
+
+    def test_benign_d3d11_fallback_message_does_not_false_negative(self):
+        """关键回归：FFmpeg 在 QSV 路径上常打印
+        ``Failed to create a D3D11 device, trying D3D9.`` 之类的回退提示，
+        然后正常继续编码。旧的过宽 ``failed to create`` 标记会把它误判为失败。
+        """
+        benign_stderr = (
+            "[AVHWDeviceContext @ 0xabc] Failed to create a D3D11 device, "
+            "trying D3D9.\n"
+            "frame=    1 fps=0.0 q=-0.0 size=N/A time=00:00:01.00 bitrate=N/A\n"
+        )
+        with mock.patch(
+            "beaverpush.services.encoder_probe.subprocess.run",
+            return_value=_fake_completed(returncode=0, stderr=benign_stderr),
+        ):
+            ok, _, _ = encoder_probe._probe_encoder("h264_qsv")
+            assert ok is True
 
 
 class TestClassifyGpuVendor:
@@ -241,7 +317,7 @@ class TestDetectAvailableEncoders:
         ), mock.patch.object(
             encoder_probe, "detect_gpu_vendors", return_value=None,
         ), mock.patch.object(
-            encoder_probe, "_probe_encoder", return_value=False,
+            encoder_probe, "_probe_encoder", return_value=_probe_result(False),
         ):
             result = encoder_probe.detect_available_encoders()
         assert "libx264" in result
@@ -258,7 +334,7 @@ class TestDetectAvailableEncoders:
             encoder_probe, "detect_gpu_vendors", return_value=None,
         ), mock.patch.object(
             encoder_probe, "_probe_encoder",
-            side_effect=lambda name: name in ("h264_qsv", "hevc_qsv"),
+            side_effect=lambda name: _probe_result(name in ("h264_qsv", "hevc_qsv")),
         ):
             result = encoder_probe.detect_available_encoders()
         assert "libx264" in result
@@ -273,7 +349,7 @@ class TestDetectAvailableEncoders:
         ), mock.patch.object(
             encoder_probe, "detect_gpu_vendors", return_value=None,
         ), mock.patch.object(
-            encoder_probe, "_probe_encoder", return_value=True,
+            encoder_probe, "_probe_encoder", return_value=_probe_result(True),
         ):
             result = encoder_probe.detect_available_encoders()
         assert result == ["libx264"]
@@ -286,9 +362,9 @@ class TestDetectAvailableEncoders:
         all_listed = set(encoder_probe.SOFTWARE_ENCODERS) | set(encoder_probe.HARDWARE_ENCODERS)
         probe_calls: list[str] = []
 
-        def fake_probe(name: str) -> bool:
+        def fake_probe(name: str):
             probe_calls.append(name)
-            return True  # 模拟 libmfx 软件回退导致的“假成功”
+            return _probe_result(True)  # 模拟 libmfx 软件回退导致的“假成功”
 
         with mock.patch.object(
             encoder_probe, "_list_ffmpeg_encoders", return_value=all_listed,
@@ -313,7 +389,7 @@ class TestDetectAvailableEncoders:
         ), mock.patch.object(
             encoder_probe, "detect_gpu_vendors", return_value=set(),
         ), mock.patch.object(
-            encoder_probe, "_probe_encoder", return_value=True,
+            encoder_probe, "_probe_encoder", return_value=_probe_result(True),
         ):
             result = encoder_probe.detect_available_encoders()
         for hw in encoder_probe.HARDWARE_ENCODERS:
@@ -327,7 +403,7 @@ class TestDetectAvailableEncoders:
             encoder_probe, "detect_gpu_vendors", return_value=None,
         ), mock.patch.object(
             encoder_probe, "_probe_encoder",
-            side_effect=lambda name: name == "h264_nvenc",
+            side_effect=lambda name: _probe_result(name == "h264_nvenc"),
         ):
             result = encoder_probe.detect_available_encoders()
         assert "h264_nvenc" in result
@@ -341,7 +417,47 @@ class TestDetectAvailableEncoders:
         with mock.patch.object(
             encoder_probe, "_list_ffmpeg_encoders", list_mock,
         ), mock.patch.object(
-            encoder_probe, "_probe_encoder", return_value=False,
+            encoder_probe, "_probe_encoder", return_value=_probe_result(False),
         ):
             encoder_probe.detect_available_encoders()
         assert list_mock.call_count == 1
+
+    def test_probe_failure_logs_stderr_when_vendor_detected(self):
+        """vendor 已确认在场（这里是 intel）但 QSV probe 仍失败时，
+        必须把 ffmpeg stderr 抬到 WARNING 日志，否则用户根本无法定位
+        驱动 / oneVPL / runtime 哪一层挂了。
+        """
+        from loguru import logger as _logger
+
+        marker_stderr = (
+            "[h264_qsv @ 0x1] Error creating a MFX session: -9.\n"
+            "Conversion failed!\n"
+        )
+        all_listed = set(encoder_probe.SOFTWARE_ENCODERS) | set(encoder_probe.HARDWARE_ENCODERS)
+
+        captured: list[str] = []
+        sink_id = _logger.add(
+            lambda msg: captured.append(str(msg)),
+            level="WARNING",
+            format="{level}|{message}",
+        )
+        try:
+            with mock.patch.object(
+                encoder_probe, "_list_ffmpeg_encoders", return_value=all_listed,
+            ), mock.patch.object(
+                encoder_probe, "detect_gpu_vendors", return_value={"intel"},
+            ), mock.patch.object(
+                encoder_probe, "_probe_encoder",
+                return_value=_probe_result(False, rc=1, stderr=marker_stderr),
+            ):
+                result = encoder_probe.detect_available_encoders()
+        finally:
+            _logger.remove(sink_id)
+
+        assert "h264_qsv" not in result
+        warning_blob = "\n".join(captured)
+        # 警告里必须出现：编码器名 + 厂商 + ffmpeg 实际报错关键字
+        assert "WARNING" in warning_blob
+        assert "h264_qsv" in warning_blob
+        assert "intel" in warning_blob
+        assert "Error creating a MFX session" in warning_blob
