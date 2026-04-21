@@ -27,8 +27,11 @@
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
+import tempfile
+from contextlib import contextmanager
 from concurrent.futures import ThreadPoolExecutor
 
 from .ffmpeg_path import get_ffmpeg
@@ -242,25 +245,59 @@ _HARDWARE_FAILURE_STDERR_MARKERS: tuple[str, ...] = (
 )
 
 
-def _probe_source_args(name: str) -> list[str]:
+def _create_qsv_probe_video() -> str:
+    """生成一个极小的临时视频文件，供 QSV probe 使用。
+
+    实机反馈表明：即使改成 ``testsrc2=...:format=nv12``，某些 Intel
+    iGPU + oneVPL / D3D11 组合仍会在 lavfi ``wrapped_avframe`` 输入上以
+    ``Error creating a MFX session: -9.`` 失败；但用户拿真实视频文件执行
+    ``ffmpeg -i xxx.mp4 -c:v hevc_qsv ...`` 却可以正常转码。
+
+    因此这里不再让 QSV 直接吃 lavfi，而是生成一段单帧 ``y4m`` 临时视频，
+    让 probe 走更接近真实 ``-i 文件`` 的路径；同时不引入额外 ffmpeg
+    子进程，也不依赖 ``libx264`` 等额外编码器。
+    """
+    width, height = 1280, 720
+    fd, path = tempfile.mkstemp(
+        prefix="beaverpush-qsv-probe-",
+        suffix=".y4m",
+    )
+    with os.fdopen(fd, "wb") as f:
+        f.write(
+            (
+                f"YUV4MPEG2 W{width} H{height} F30:1 "
+                "Ip A1:1 C420jpeg\n"
+            ).encode("ascii")
+        )
+        f.write(b"FRAME\n")
+        f.write(bytes([16]) * (width * height))
+        chroma_plane = bytes([128]) * (width * height // 4)
+        f.write(chroma_plane)
+        f.write(chroma_plane)
+    return path
+
+
+@contextmanager
+def _probe_source_args(name: str):
     """返回探测该编码器时使用的输入源参数。
 
-    ``hevc_qsv`` 在部分 Intel + oneVPL / D3D11 驱动组合上，对过小的 RGB
-    ``testsrc`` + ``-pix_fmt yuv420p`` 路径比较敏感：ffmpeg 会先报
-    ``Incompatible pixel format 'yuv420p' ... auto-selecting format 'nv12'``，
-    随后直接以 ``Error creating a MFX session: -9.`` 失败；但用户对真实
-    ``nv12`` / ``yuv420p`` 视频源做命令行转码又是正常的。为了让 probe 更贴近
-    真正推流/转码路径，QSV 改用更常见的 720p30 ``nv12`` 合成源。
+    QSV：使用临时视频文件输入，贴近用户实际的 ``ffmpeg -i input.mp4``
+    转码路径，规避 lavfi ``wrapped_avframe`` 在部分 Intel 驱动上的假阴性。
 
-    NVENC 则继续保留原来的 ``yuv420p`` 路径，避免重新引入历史上的
-    ``gbrp`` / High 4:4:4 假阴性。
+    NVENC / 软件编码器：继续保留原来的 ``testsrc`` + ``-pix_fmt yuv420p``
+    路径，避免重新引入历史上的 ``gbrp`` / High 4:4:4 假阴性。
     """
     if name.endswith("_qsv"):
-        return [
-            "-f", "lavfi",
-            "-i", "testsrc2=duration=1:size=1280x720:rate=30,format=nv12",
-        ]
-    return [
+        path = _create_qsv_probe_video()
+        try:
+            yield ["-i", path]
+        finally:
+            try:
+                os.unlink(path)
+            except FileNotFoundError:
+                pass
+        return
+    yield [
         "-f", "lavfi",
         "-i", "testsrc=duration=1:size=320x240:rate=1",
         "-pix_fmt", "yuv420p",
@@ -285,8 +322,8 @@ def _probe_encoder(
     "ffmpeg 内置了 QSV 但用户机器只有 N 卡也被探测为可用" 的误报。
 
     输入源也按编码器做了轻微区分：
-        * QSV：使用更接近真实视频输入的 ``testsrc2 ... format=nv12``；
-          这样可以避开某些 Intel 驱动对极小 RGB 测试图的假阴性。
+        * QSV：使用临时视频文件输入，尽量贴近用户真实的 ``-i 文件`` 路径；
+          这样可以避开某些 Intel 驱动对 lavfi ``wrapped_avframe`` 的假阴性。
         * 其它编码器：继续用 ``testsrc`` + ``-pix_fmt yuv420p``。其中
           ``yuv420p`` 对 NVENC 是必须的：默认 ``rgb24`` 经自动协商后容易
           变成 ``gbrp``，触发 ``High 4:4:4`` profile，进而误判 nvenc 不可用。
@@ -302,35 +339,36 @@ def _probe_encoder(
     last_returncode: int | None = None
     last_stderr: str = ""
 
-    # 软件编码器：device_specs 为空，循环退化成单次直跑
-    for spec in device_specs or (None,):
-        cmd = [get_ffmpeg(), "-hide_banner", "-y"]
-        if spec is not None:
-            cmd += ["-init_hw_device", spec]
-        cmd += _probe_source_args(name)
-        cmd += ["-frames:v", "1", "-c:v", name, "-f", "null", "-"]
-        try:
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=timeout,
-                creationflags=CREATE_NO_WINDOW,
-            )
-        except (FileNotFoundError, subprocess.TimeoutExpired, OSError) as e:
-            last_returncode = None
-            last_stderr = f"{type(e).__name__}: {e}"
-            continue
+    with _probe_source_args(name) as source_args:
+        # 软件编码器：device_specs 为空，循环退化成单次直跑
+        for spec in device_specs or (None,):
+            cmd = [get_ffmpeg(), "-hide_banner", "-y"]
+            if spec is not None:
+                cmd += ["-init_hw_device", spec]
+            cmd += source_args
+            cmd += ["-frames:v", "1", "-c:v", name, "-f", "null", "-"]
+            try:
+                result = subprocess.run(
+                    cmd,
+                    capture_output=True,
+                    text=True,
+                    timeout=timeout,
+                    creationflags=CREATE_NO_WINDOW,
+                )
+            except (FileNotFoundError, subprocess.TimeoutExpired, OSError) as e:
+                last_returncode = None
+                last_stderr = f"{type(e).__name__}: {e}"
+                continue
 
-        stderr_text = result.stderr or ""
-        if result.returncode == 0:
-            stderr_lower = stderr_text.lower()
-            if not any(m in stderr_lower for m in _HARDWARE_FAILURE_STDERR_MARKERS):
-                return True, result.returncode, stderr_text
-            # rc=0 但 stderr 命中明确失败标记（例如 libmfx 软回退后仍打印
-            # ``Error creating a MFX session``）。把它当成失败再尝试下一个 spec。
-        last_returncode = result.returncode
-        last_stderr = stderr_text
+            stderr_text = result.stderr or ""
+            if result.returncode == 0:
+                stderr_lower = stderr_text.lower()
+                if not any(m in stderr_lower for m in _HARDWARE_FAILURE_STDERR_MARKERS):
+                    return True, result.returncode, stderr_text
+                # rc=0 但 stderr 命中明确失败标记（例如 libmfx 软回退后仍打印
+                # ``Error creating a MFX session``）。把它当成失败再尝试下一个 spec。
+            last_returncode = result.returncode
+            last_stderr = stderr_text
 
     return False, last_returncode, last_stderr
 
