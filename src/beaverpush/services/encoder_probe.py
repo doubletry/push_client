@@ -69,7 +69,13 @@ def _detect_gpu_vendors_windows(timeout: float) -> set[str] | None:
     """枚举 Windows 显示适配器厂商。先尝试 PowerShell（Win10/11 通用），
     再退回到 ``wmic``（旧机器）。任意一个命令成功即返回结果集合。
     全部失败时返回 ``None`` 表示"无法判断"。
+
+    PowerShell 在 Win11 冷启动时可能超过 5 秒，因此本函数内部把每条命令的
+    超时强制至少抬到 10 秒，避免 CIM 子系统冷启时被超时打回 ``None`` 后
+    fallback 到只看 ffmpeg probe 的旧逻辑（那条路径在没有 vendor 信息时
+    会去实跑硬件 probe，反而更容易出现假阴性）。
     """
+    timeout = max(timeout, 10.0)
     cmds = (
         [
             "powershell.exe", "-NoProfile", "-Command",
@@ -187,60 +193,107 @@ def _ffmpeg_lists_encoder(name: str, timeout: float = 5.0) -> bool:
     return name in _list_ffmpeg_encoders(timeout=timeout)
 
 
-def _probe_encoder(name: str, timeout: float = 8.0) -> bool:
-    """尝试用 1 帧 ``testsrc`` 实际跑一次该编码器，返回是否成功。
+def _nvenc_device_specs() -> tuple[str, ...]:
+    """返回 NVENC ``-init_hw_device`` 候选规范。
 
-    对硬件编码器 (``*_qsv`` / ``*_nvenc``) 显式加上 ``-init_hw_device``，
-    强制 FFmpeg 创建对应的硬件会话——若机器上没有 Intel iGPU 或
-    NVIDIA GPU，对应的 device init 会失败，进程返回非零，从而避免出现
-    "ffmpeg 内置了 QSV 但用户机器只有 N 卡也被探测为可用" 的误报。
-
-    注意 ``-pix_fmt yuv420p`` 是必须的：``testsrc`` 默认输出 ``rgb24`` →
-    libavfilter 自动 negotiate 成 ``gbrp``，会让 NVENC 走 ``High 4:4:4``
-    profile。这个 profile 在部分驱动/显卡组合下不被支持（或与并发会话冲突），
-    导致探测失败而误判 ``h264_nvenc`` 不可用；而真正推流时我们用的是
-    ``yuv420p`` 是受支持的，所以这里强制对齐成 ``yuv420p`` 才能反映真实可用性。
+    ``cuda=cu`` 在所有平台都是文档化的写法；这里用同样的 try-list 结构
+    主要为了对称，方便日后补充 d3d11/vaapi 后端。
     """
-    cmd = [get_ffmpeg(), "-hide_banner", "-y"]
-    # 硬件初始化前置：不存在对应硬件时 ffmpeg 会直接退出非 0
-    if name.endswith("_qsv"):
-        cmd += ["-init_hw_device", "qsv=hw:hw_any"]
-    elif name.endswith("_nvenc"):
-        cmd += ["-init_hw_device", "cuda=cu"]
-    cmd += [
-        "-f", "lavfi",
-        "-i", "testsrc=duration=1:size=320x240:rate=1",
-        "-frames:v", "1",
-        "-pix_fmt", "yuv420p",
-        "-c:v", name,
-        "-f", "null", "-",
-    ]
-    try:
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            creationflags=CREATE_NO_WINDOW,
-        )
-    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
-        return False
-    if result.returncode != 0:
-        return False
-    # 即使返回 0，也再扫一遍 stderr 中 device 初始化相关的失败标志，
-    # 因为某些 QSV 实现会在软件回退后仍然返回 0。
-    stderr_lower = (result.stderr or "").lower()
-    bad_markers = (
-        "device creation failed",
-        "failed to create",
-        "cannot load",
-        "no device available",
-        "error initializing",
-        "error creating a mfx session",
-    )
-    if any(m in stderr_lower for m in bad_markers):
-        return False
-    return True
+    return ("cuda=cu",)
+
+
+# rc=0 但 stderr 中出现以下任一标记时，仍判定该编码器不可用。
+# 这些标记必须严格指向「硬件初始化 / MFX 会话」失败，避免误伤
+# 例如 ``Failed to create a D3D11 device, trying D3D9.`` 这种 FFmpeg
+# 在 QSV 路径上常见的回退提示——它打印之后通常仍然能成功跑完。
+_HARDWARE_FAILURE_STDERR_MARKERS: tuple[str, ...] = (
+    # ``-init_hw_device`` 阶段失败时打印；rc 通常已经非 0，这里兜底
+    "device creation failed",
+    # libmfx / oneVPL 在 session 创建阶段的标准失败信息
+    "error creating a mfx session",
+    # FFmpeg 6.x 起 oneVPL 也会用 "initialise" / "initialize" 两种拼写
+    "failed to initialise mfx session",
+    "failed to initialize mfx session",
+    # 显式说明没有可用硬件设备
+    "no device available for encoder",
+    # MFX dispatcher 自己加载失败（缺驱动 / runtime）。限定 mfx 前缀
+    # 避免命中 ``Cannot load avcodec_open2`` 之类无关行
+    "cannot load mfx",
+)
+
+
+def _probe_encoder(
+    name: str,
+    timeout: float = 8.0,
+) -> tuple[bool, int | None, str]:
+    """尝试用 1 帧 ``testsrc`` 实际跑一次该编码器。
+
+    返回 ``(available, last_returncode, last_stderr)``：
+        * ``available`` —— 是否至少有一条 spec 跑成功；
+        * 后两个字段是 **最后一次失败** 的进程信息，仅供调用方在 vendor
+          已确认存在却仍探测失败时打 WARNING 日志，便于定位驱动 / oneVPL
+          问题。``available=True`` 时这两个字段无意义。
+
+    NVENC 仍显式加上 ``-init_hw_device``，强制 FFmpeg 创建 CUDA 设备，
+    避免把"编进了 nvenc 但当前驱动 / 会话不可用"误判为可用。
+
+    QSV 则刻意 **不** 前置 ``-init_hw_device``：最新实机日志表明，某些
+    Intel iGPU + oneVPL / D3D11 组合在显式 QSV device init 路径下会直接
+    以 ``Error creating a MFX session: -9.`` 失败，但用户用普通命令
+    ``ffmpeg -i input.mp4 -c:v hevc_qsv ...`` 却能成功。对这类机器，probe
+    必须尽量贴近真实使用方式，让 FFmpeg 自己走默认的 QSV 初始化路径。
+
+    输入统一使用 ``testsrc`` + ``-pix_fmt yuv420p``。其中 ``yuv420p`` 对
+    NVENC 是必须的：默认 ``rgb24`` 经自动协商后容易变成 ``gbrp``，触发
+    ``High 4:4:4`` profile，进而误判 nvenc 不可用；QSV 也可以正常接受
+    这条更简单的 probe 路径。
+    """
+    # 选出该编码器要尝试的硬件设备规范候选；软件编码器为空 tuple 表示一次直跑。
+    if name.endswith("_nvenc"):
+        device_specs = _nvenc_device_specs()
+    else:
+        device_specs = ()
+
+    last_returncode: int | None = None
+    last_stderr: str = ""
+
+    # 软件编码器：device_specs 为空，循环退化成单次直跑
+    for spec in device_specs or (None,):
+        cmd = [get_ffmpeg(), "-hide_banner", "-y"]
+        if spec is not None:
+            cmd += ["-init_hw_device", spec]
+        cmd += [
+            "-f", "lavfi",
+            "-i", "testsrc=duration=1:size=320x240:rate=1",
+            "-frames:v", "1",
+            "-pix_fmt", "yuv420p",
+            "-c:v", name,
+            "-f", "null", "-",
+        ]
+        try:
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                creationflags=CREATE_NO_WINDOW,
+            )
+        except (FileNotFoundError, subprocess.TimeoutExpired, OSError) as e:
+            last_returncode = None
+            last_stderr = f"{type(e).__name__}: {e}"
+            continue
+
+        stderr_text = result.stderr or ""
+        if result.returncode == 0:
+            stderr_lower = stderr_text.lower()
+            if not any(m in stderr_lower for m in _HARDWARE_FAILURE_STDERR_MARKERS):
+                return True, result.returncode, stderr_text
+            # rc=0 但 stderr 命中明确失败标记（例如 libmfx 软回退后仍打印
+            # ``Error creating a MFX session``）。把它当成失败再尝试下一个 spec。
+        last_returncode = result.returncode
+        last_stderr = stderr_text
+
+    return False, last_returncode, last_stderr
 
 
 def detect_available_encoders() -> list[str]:
@@ -310,10 +363,34 @@ def detect_available_encoders() -> list[str]:
         for name in HARDWARE_ENCODERS:
             if name not in results:
                 continue
-            if results[name]:
+            ok, rc, stderr_text = results[name]
+            if ok:
                 available.append(name)
                 logger.info("硬件编码器 {} 可用", name)
             else:
-                logger.info("硬件编码器 {} 探测失败，硬件/驱动可能不支持", name)
+                # 当 OS 层已经确认对应厂商在场，却 probe 失败时，把 ffmpeg
+                # stderr 的尾部抬到 WARNING 级别，方便用户/维护者一眼看出
+                # 是驱动 / oneVPL / runtime 哪一层挂了，避免再出现「QSV
+                # 神秘消失」的盲点。
+                required_vendor = CODEC_REQUIRED_VENDOR.get(name)
+                vendor_present = (
+                    vendors is not None
+                    and required_vendor is not None
+                    and required_vendor in vendors
+                )
+                stderr_tail = "\n".join(
+                    (stderr_text or "").splitlines()[-20:]
+                )
+                if vendor_present:
+                    logger.warning(
+                        "检测到 {} GPU 但硬件编码器 {} 探测失败 "
+                        "(returncode={}); ffmpeg stderr 尾部:\n{}",
+                        required_vendor, name, rc, stderr_tail,
+                    )
+                else:
+                    logger.info(
+                        "硬件编码器 {} 探测失败，硬件/驱动可能不支持 "
+                        "(returncode={})", name, rc,
+                    )
 
     return available
