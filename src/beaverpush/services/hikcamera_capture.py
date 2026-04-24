@@ -22,6 +22,13 @@
 .. note::
     海康相机 SDK (``MvCameraControl.dll`` / ``libMvCameraControl.so``) 必须
     单独安装，路径可通过 ``HIKCAMERA_SDK_PATH`` 环境变量覆盖。
+
+.. note::
+    自 hikcamera v2.1.x 起，SDK 提供了基于 ``MV_CC_HB_Decode`` /
+    ``MV_CC_ConvertPixelTypeEx`` 的 RAW→RGB 解码管线，本模块默认启用
+    （``use_sdk_decode=True``），并在打开相机后通过
+    ``cam.set_use_sdk_decode(...)`` 显式切换。设为 ``False`` 时会回退到
+    旧版基于 OpenCV 的解码路径，两条路径输出图像略有差异。
 """
 
 from __future__ import annotations
@@ -40,12 +47,47 @@ def _make_even(v: int) -> int:
     return v if v % 2 == 0 else v + 1
 
 
-def probe_hikcamera_size(serial_number: str, timeout_ms: int = 3000) -> tuple[int, int]:
+def _apply_sdk_decode(cam, use_sdk_decode: bool) -> None:
+    """调用 ``cam.set_use_sdk_decode(...)``。
+
+    若当前 ``hikcamera`` 版本不存在该方法，则按兼容性回退静默跳过；若方法
+    存在但调用失败，则记录告警并继续上抛异常，避免用户显式配置被悄悄忽略。
+    """
+    setter = getattr(cam, "set_use_sdk_decode", None)
+    if setter is None:
+        logger.debug("当前 hikcamera 版本不支持 set_use_sdk_decode，跳过设置")
+        return
+    serial_number = (
+        getattr(cam, "serial_number", None)
+        or getattr(cam, "sn", None)
+        or getattr(cam, "device_serial_number", None)
+        or "unknown"
+    )
+    try:
+        setter(bool(use_sdk_decode))
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "相机 SN={} 调用 set_use_sdk_decode({}) 失败：{}",
+            serial_number,
+            use_sdk_decode,
+            exc,
+        )
+        raise
+
+
+def probe_hikcamera_size(
+    serial_number: str,
+    timeout_ms: int = 3000,
+    *,
+    use_sdk_decode: bool = True,
+) -> tuple[int, int]:
     """连接指定 SN 的海康相机并抓取一帧，返回 (宽, 高)。
 
     Args:
-        serial_number: 海康相机序列号。
-        timeout_ms:    单帧抓取超时（毫秒）。
+        serial_number:   海康相机序列号。
+        timeout_ms:      单帧抓取超时（毫秒）。
+        use_sdk_decode:  是否启用 SDK 内置 RAW→RGB 解码（默认 ``True``）。
+            禁用时回退到 OpenCV 解码路径。
 
     Returns:
         ``(width, height)`` 偶数化后的画面尺寸。
@@ -73,6 +115,7 @@ def probe_hikcamera_size(serial_number: str, timeout_ms: int = 3000) -> tuple[in
     try:
         with cam_factory as cam:
             cam.open(Hik.AccessMode.EXCLUSIVE)
+            _apply_sdk_decode(cam, use_sdk_decode)
             cam.start_grabbing()
             try:
                 frame = cam.get_frame(
@@ -118,12 +161,15 @@ class HikCameraFeeder:
         expected_width: int,
         expected_height: int,
         fps: int = 30,
+        *,
+        use_sdk_decode: bool = True,
     ):
         self.sn = (sn or "").strip()
         self.fps = fps if fps > 0 else 30
         self._expected_w = _make_even(int(expected_width))
         self._expected_h = _make_even(int(expected_height))
         self._frame_bytes = self._expected_w * self._expected_h * 3
+        self._use_sdk_decode = bool(use_sdk_decode)
         self._process: subprocess.Popen | None = None
         self._cam = None  # type: ignore[assignment]
         self._cam_ctx_active = False
@@ -175,6 +221,7 @@ class HikCameraFeeder:
 
         try:
             cam.open(Hik.AccessMode.EXCLUSIVE)
+            _apply_sdk_decode(cam, self._use_sdk_decode)
             cam.start_grabbing(
                 callback=self._on_frame,
                 output_format=Hik.OutputFormat.BGR8,
@@ -185,8 +232,9 @@ class HikCameraFeeder:
             raise RuntimeError(f"启动海康相机取流失败：{exc}") from exc
 
         logger.info(
-            "海康相机已启动 sn={} size={}x{} fps={}",
+            "海康相机已启动 sn={} size={}x{} fps={} use_sdk_decode={}",
             self.sn, self._expected_w, self._expected_h, self.fps,
+            self._use_sdk_decode,
         )
 
     def stop(self):
