@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QLineEdit, QPushButton, QScrollArea,
     QMessageBox, QFrame, QDialog, QTextBrowser, QSizePolicy,
+    QCheckBox,
 )
 
 from .stream_card import StreamCardView
@@ -52,6 +53,7 @@ class MainWindow(QMainWindow):
     username_changed   = Signal(str)
     machine_name_changed = Signal(str)
     auth_secret_changed = Signal(str)
+    launch_at_startup_changed = Signal(bool)
     # 全部开始/停止推流信号
     start_all_clicked  = Signal()
     stop_all_clicked   = Signal()
@@ -63,6 +65,8 @@ class MainWindow(QMainWindow):
         self.setMinimumSize(900, 400)
 
         self._cards: list[StreamCardView] = []
+        # 是否支持开机自启动，默认按当前平台决定；Controller 启动期会再覆盖一次
+        self._launch_at_startup_supported: bool = True
         self._build_ui()
 
     # ==================================================================
@@ -398,6 +402,18 @@ class MainWindow(QMainWindow):
         )
         bar.addWidget(self._server_reconnect_max_attempts_input)
         bar.addWidget(QLabel("次"))
+
+        # 开机自启动（仅 Windows 生效，其他平台保持禁用）
+        self._launch_at_startup_checkbox = QCheckBox("开机自启动")
+        self._launch_at_startup_checkbox.setToolTip(
+            "勾选后系统启动时自动运行河狸推流，并恢复上次正在推流的通道"
+        )
+        self._launch_at_startup_checkbox.toggled.connect(
+            self.launch_at_startup_changed.emit
+        )
+        bar.addSpacing(10)
+        bar.addWidget(self._launch_at_startup_checkbox)
+
         bar.addStretch()
         return bar
 
@@ -447,6 +463,10 @@ class MainWindow(QMainWindow):
         self._auth_secret_input.setReadOnly(locked)
         self._server_reconnect_interval_input.setReadOnly(locked)
         self._server_reconnect_max_attempts_input.setReadOnly(locked)
+        # QCheckBox 没有 setReadOnly，使用 setEnabled 联动锁定
+        self._launch_at_startup_checkbox.setEnabled(
+            (not locked) and self._launch_at_startup_supported
+        )
         if locked:
             self._lock_btn.setText("🔒")
             self._lock_btn.setToolTip("点击解锁全局配置")
@@ -457,6 +477,25 @@ class MainWindow(QMainWindow):
     def get_server_locked(self) -> bool:
         """获取 RTSP 服务器地址的锁定状态。"""
         return self._server_input.isReadOnly()
+
+    def set_launch_at_startup(self, enabled: bool):
+        """设置「开机自启动」勾选框的状态（不触发 :attr:`launch_at_startup_changed`）。"""
+        self._launch_at_startup_checkbox.blockSignals(True)
+        try:
+            self._launch_at_startup_checkbox.setChecked(bool(enabled))
+        finally:
+            self._launch_at_startup_checkbox.blockSignals(False)
+
+    def get_launch_at_startup(self) -> bool:
+        """读取「开机自启动」勾选框的当前状态。"""
+        return self._launch_at_startup_checkbox.isChecked()
+
+    def set_launch_at_startup_supported(self, supported: bool):
+        """根据当前平台是否支持开机自启动来启用/禁用勾选框。"""
+        self._launch_at_startup_supported = bool(supported)
+        if not supported:
+            self._launch_at_startup_checkbox.setEnabled(False)
+            self._launch_at_startup_checkbox.setToolTip("当前平台不支持开机自启动")
 
     def _build_scroll_area(self) -> QScrollArea:
         """构建可滚动的卡片容器。"""
