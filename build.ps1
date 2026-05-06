@@ -107,6 +107,7 @@ try {
         "--standalone"
         "--assume-yes-for-downloads"
         "--enable-plugin=pyside6"
+        "--disable-cache=ccache"
         "--windows-console-mode=disable"
         "--windows-product-name=$ProductName"
         "--output-filename=$ProductName.exe"
