@@ -1,15 +1,9 @@
 name: Validate build.ps1
 
+permissions:
+  contents: read
+
 on:
-  push:
-    branches:
-      - 'copilot/fix-checkbox-checkmark-issues'
-    paths:
-      - 'build.ps1'
-      - 'installer.iss'
-      - 'pyproject.toml'
-      - '.github/workflows/build-release.yml'
-      - '.github/workflows/validate-build-ps1.yml'
   pull_request:
     paths:
       - 'build.ps1'
