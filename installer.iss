@@ -77,9 +77,9 @@ Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: de
 Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#StringChange(MyAppName, '&', '&&')}}"; Flags: nowait postinstall skipifsilent
 
 [Code]
-; 应用内可勾选「开机自启动」时会写入 HKCU\...\Run\BeaverPush。
-; 安装器不在安装阶段创建该值，仅在卸载时做残留清理，避免用户卸载/换路径后
-; 系统启动仍尝试执行旧路径。
+// 应用内可勾选「开机自启动」时会写入 HKCU\...\Run\BeaverPush。
+// 安装器不在安装阶段创建该值，仅在卸载时做残留清理，避免用户卸载/换路径后
+// 系统启动仍尝试执行旧路径。
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 begin
   if CurUninstallStep = usUninstall then
