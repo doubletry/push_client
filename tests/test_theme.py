@@ -1,7 +1,27 @@
+from collections import Counter
+
+import pytest
+
 from PySide6.QtCore import QFile
 from PySide6.QtWidgets import QApplication, QCheckBox, QStyle, QStyleOptionButton
 
 from beaverpush.views.theme import Theme
+
+
+def _indicator_colors(checkbox: QCheckBox) -> dict[str, int]:
+    option = QStyleOptionButton()
+    checkbox.initStyleOption(option)
+    indicator_rect = checkbox.style().subElementRect(
+        QStyle.SubElement.SE_CheckBoxIndicator,
+        option,
+        checkbox,
+    )
+    image = checkbox.grab(indicator_rect).toImage()
+    return Counter(
+        image.pixelColor(x, y).name()
+        for x in range(image.width())
+        for y in range(image.height())
+    )
 
 
 def test_global_stylesheet_uses_qt_resource_for_checkbox_checkmark():
@@ -12,31 +32,34 @@ def test_global_stylesheet_uses_qt_resource_for_checkbox_checkmark():
     assert QFile.exists(":/assets/checkmark.svg")
 
 
-def test_checked_checkbox_renders_checkmark_from_qt_resource():
+@pytest.mark.parametrize(
+    ("checked", "enabled", "dominant_color", "expect_checkmark"),
+    [
+        (False, True, Theme.SURFACE0.lower(), False),
+        (True, True, Theme.BLUE.lower(), True),
+        (True, False, Theme.OVERLAY1.lower(), True),
+    ],
+)
+def test_checkbox_indicator_renders_expected_theme_state(
+    checked: bool,
+    enabled: bool,
+    dominant_color: str,
+    expect_checkmark: bool,
+):
     app = QApplication.instance() or QApplication([])
     app.setStyleSheet(Theme.global_stylesheet())
 
     checkbox = QCheckBox("demo")
-    checkbox.setChecked(True)
+    checkbox.setChecked(checked)
+    checkbox.setEnabled(enabled)
     checkbox.resize(checkbox.sizeHint())
     checkbox.show()
     app.processEvents()
 
     try:
-        option = QStyleOptionButton()
-        checkbox.initStyleOption(option)
-        indicator_rect = checkbox.style().subElementRect(
-            QStyle.SubElement.SE_CheckBoxIndicator,
-            option,
-            checkbox,
-        )
-        image = checkbox.grab(indicator_rect).toImage()
-        colors = {
-            image.pixelColor(x, y).name()
-            for x in range(image.width())
-            for y in range(image.height())
-        }
-        assert Theme.BASE.lower() in colors
+        colors = _indicator_colors(checkbox)
+        assert max(colors, key=colors.get) == dominant_color
+        assert (Theme.BASE.lower() in colors) is expect_checkmark
     finally:
         checkbox.deleteLater()
         app.processEvents()
