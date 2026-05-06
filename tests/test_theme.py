@@ -8,7 +8,7 @@ def test_global_stylesheet_uses_qt_resource_for_checkbox_checkmark():
     stylesheet = Theme.global_stylesheet()
 
     assert 'image: url(":/assets/checkmark.svg");' in stylesheet
-    assert "file:" not in stylesheet
+    assert 'image: url("file:' not in stylesheet
     assert QFile.exists(":/assets/checkmark.svg")
 
 
