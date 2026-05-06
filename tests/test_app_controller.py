@@ -482,15 +482,17 @@ def test_close_event_quits_when_system_tray_missing(monkeypatch):
     window = MainWindow()
     try:
         ctrl = AppController(window, app)
-        called: list[str] = []
-        monkeypatch.setattr(ctrl, "_cleanup_and_quit", lambda: called.append("quit"))
+        cleanup_calls: list[str] = []
+        monkeypatch.setattr(
+            ctrl, "_cleanup_and_quit", lambda: cleanup_calls.append("quit"),
+        )
 
         event = QCloseEvent()
         ctrl._tray = None
         ctrl._on_close(event)
 
         assert event.isAccepted()
-        assert called == ["quit"]
+        assert cleanup_calls == ["quit"]
     finally:
         window.deleteLater()
         app.processEvents()
