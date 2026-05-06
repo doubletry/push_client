@@ -8,7 +8,7 @@ from PySide6.QtWidgets import QApplication, QCheckBox, QStyle, QStyleOptionButto
 from beaverpush.views.theme import Theme
 
 
-def _indicator_colors(checkbox: QCheckBox) -> dict[str, int]:
+def _indicator_color_counts(checkbox: QCheckBox) -> dict[str, int]:
     option = QStyleOptionButton()
     checkbox.initStyleOption(option)
     indicator_rect = checkbox.style().subElementRect(
@@ -57,10 +57,12 @@ def test_checkbox_indicator_renders_expected_theme_state(
     app.processEvents()
 
     try:
-        colors = _indicator_colors(checkbox)
-        assert colors
-        assert max(colors, key=colors.get) == dominant_color
-        assert (Theme.BASE.lower() in colors) is expect_checkmark
+        color_counts = _indicator_color_counts(checkbox)
+        if not color_counts:
+            pytest.fail("checkbox indicator did not render any pixels")
+        actual_dominant_color = max(color_counts, key=color_counts.get)
+        assert actual_dominant_color == dominant_color
+        assert (Theme.BASE.lower() in color_counts) is expect_checkmark
     finally:
         checkbox.deleteLater()
         app.processEvents()
