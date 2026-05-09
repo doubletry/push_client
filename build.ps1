@@ -116,10 +116,10 @@ function New-CmdNoAutoRunWrapper {
 
     New-Item -ItemType Directory -Path $Directory -Force -ErrorAction Stop | Out-Null
     $wrapperPath = Join-Path $Directory "cmd-no-autorun.cmd"
-@'
+    @'
 @echo off
 "%SystemRoot%\System32\cmd.exe" /d %*
-'@ | Set-Content -Path $wrapperPath -Encoding utf8
+'@ | Set-Content -Path $wrapperPath -Encoding ascii
     return $wrapperPath
 }
 
@@ -131,11 +131,12 @@ $GeneratedVersionFile = (New-TemporaryFile).FullName
 Set-Content -Path $GeneratedVersionFile -Value $Version -Encoding utf8
 $StagingStamp = Get-Date -Format "yyyyMMdd-HHmmss"
 $NuitkaStagingRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("beaverpush-nuitka-$StagingStamp-" + [guid]::NewGuid().ToString("N"))
-$CmdWrapperPath = New-CmdNoAutoRunWrapper -Directory $NuitkaStagingRoot
+$CmdWrapperPath = $null
 $OriginalComSpec = $env:ComSpec
-$env:ComSpec = $CmdWrapperPath
 
 try {
+    $CmdWrapperPath = New-CmdNoAutoRunWrapper -Directory $NuitkaStagingRoot
+    $env:ComSpec = $CmdWrapperPath
     # ── 基本 参数 ──
     $EntryPoint    = Join-Path $ProjectRoot "src\beaverpush\main.py"
     $OutputDir     = Join-Path $ProjectRoot "dist"
