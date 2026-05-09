@@ -116,10 +116,10 @@ function New-CmdNoAutoRunWrapper {
 
     New-Item -ItemType Directory -Path $Directory -Force -ErrorAction Stop | Out-Null
     $wrapperPath = Join-Path $Directory "cmd-no-autorun.cmd"
-    @'
+@'
 @echo off
 "%SystemRoot%\System32\cmd.exe" /d %*
-'@ | Set-Content -Path $wrapperPath -Encoding utf8
+'@ | Set-Content -Path $wrapperPath -Encoding utf8 -NoNewline:$false
     return $wrapperPath
 }
 
