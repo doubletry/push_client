@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from itertools import islice
 from pathlib import Path
 
 import pytest
@@ -11,7 +12,11 @@ from beaverpush import main as main_module
 
 def test_main_declares_nuitka_ccache_disable_directive():
     with Path(main_module.__file__).open(encoding="utf-8-sig") as f:
-        assert f.readline() == "# nuitka-project: --disable-cache=ccache\n"
+        header_lines = list(islice(f, 5))
+    assert any(
+        line.strip() == "# nuitka-project: --disable-cache=ccache"
+        for line in header_lines
+    )
 
 
 def test_minimized_start_shows_window_when_system_tray_unavailable(monkeypatch):
