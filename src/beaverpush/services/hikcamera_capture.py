@@ -33,7 +33,6 @@
 
 from __future__ import annotations
 
-import subprocess
 import threading
 from collections.abc import Callable
 
@@ -137,7 +136,6 @@ def probe_hikcamera_size(
     if w <= 0 or h <= 0:
         raise RuntimeError(f"海康相机返回的画面尺寸非法：{w}x{h}")
     return _make_even(w), _make_even(h)
-
 
 class HikCameraFeeder:
     """持续从海康工业相机抓帧并通过管道喂给 FFmpeg ``stdin``。
