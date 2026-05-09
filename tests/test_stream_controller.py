@@ -51,10 +51,9 @@ class _ImmediateConnectivityWorker:
 class _ImmediateHikProbeWorker:
     instances = []
 
-    def __init__(self, serial_number, timeout_ms=3000, *, process_timeout_seconds=8.0, use_sdk_decode=True, parent=None):  # noqa: ARG002
+    def __init__(self, serial_number, timeout_ms=3000, *, use_sdk_decode=True, parent=None):  # noqa: ARG002
         self.serial_number = serial_number
         self.timeout_ms = timeout_ms
-        self.process_timeout_seconds = process_timeout_seconds
         self.use_sdk_decode = use_sdk_decode
         self.parent = parent
         self.probe_succeeded = _FakeSignal()
