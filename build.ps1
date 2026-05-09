@@ -88,17 +88,42 @@ function Get-MissingInstallerInputs {
     return $missing
 }
 
+function Sync-NuitkaBuildOutput {
+    param(
+        [string]$StagingOutputDir,
+        [string]$FinalOutputDir,
+        [string]$ProductName
+    )
+
+    $stagedMainDist = Join-Path $StagingOutputDir "main.dist"
+    $stagedExe = Join-Path $stagedMainDist "$ProductName.exe"
+    if (-not (Test-Path $stagedExe)) {
+        throw "Nuitka 输出目录中未找到编译结果: $stagedExe"
+    }
+
+    New-Item -ItemType Directory -Path $FinalOutputDir -Force | Out-Null
+
+    $finalMainDist = Join-Path $FinalOutputDir "main.dist"
+    if (Test-Path $finalMainDist) {
+        Remove-Item $finalMainDist -Recurse -Force
+    }
+
+    Copy-Item -Path $stagedMainDist -Destination $finalMainDist -Recurse -Force
+}
+
 if ([string]::IsNullOrWhiteSpace($Version)) {
     $Version = Get-ProjectVersion -Path $PyprojectPath
 }
 $WindowsVersion = Convert-ToWindowsVersion -RawVersion $Version
 $GeneratedVersionFile = (New-TemporaryFile).FullName
 Set-Content -Path $GeneratedVersionFile -Value $Version -Encoding utf8
+$NuitkaStagingRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("beaverpush-nuitka-" + [guid]::NewGuid().ToString("N"))
 
 try {
     # ── 基本 参数 ──
     $EntryPoint    = Join-Path $ProjectRoot "src\beaverpush\main.py"
     $OutputDir     = Join-Path $ProjectRoot "dist"
+    $NuitkaOutputDir = Join-Path $NuitkaStagingRoot "dist"
     $ProductName   = "BeaverPush"
     $IconPath      = Join-Path $ProjectRoot "assets\beaver_logo.ico"
 
@@ -112,7 +137,7 @@ try {
         "--windows-product-name=$ProductName"
         "--output-filename=$ProductName.exe"
         "--product-version=$WindowsVersion"
-        "--output-dir=$OutputDir"
+        "--output-dir=$NuitkaOutputDir"
         "--include-data-dir=$ProjectRoot\assets=assets"
         "--include-data-file=$GeneratedVersionFile=assets/version.txt"
     )
@@ -130,6 +155,7 @@ try {
     Write-Host ""
     Write-Host "[INFO] 入口文件:  $EntryPoint"
     Write-Host "[INFO] 输出目录:  $OutputDir"
+    Write-Host "[INFO] Nuitka 暂存目录: $NuitkaOutputDir"
     Write-Host "[INFO] 产品名称:  $ProductName"
     Write-Host "[INFO] 版本号:    $Version"
     Write-Host "[INFO] 安装器版本: $WindowsVersion"
@@ -140,6 +166,7 @@ try {
     uv run python -m nuitka @NuitkaArgs $EntryPoint
 
     if ($LASTEXITCODE -eq 0) {
+        Sync-NuitkaBuildOutput -StagingOutputDir $NuitkaOutputDir -FinalOutputDir $OutputDir -ProductName $ProductName
         Write-Host ""
         Write-Host "[SUCCESS] 编译完成!" -ForegroundColor Green
         Write-Host "[INFO] 输出位置: $OutputDir\main.dist" -ForegroundColor Cyan
@@ -218,6 +245,9 @@ try {
     }
 }
 finally {
+    if (Test-Path $NuitkaStagingRoot) {
+        Remove-Item $NuitkaStagingRoot -Recurse -Force -ErrorAction SilentlyContinue
+    }
     if (Test-Path $GeneratedVersionFile) {
         Remove-Item $GeneratedVersionFile -Force -ErrorAction SilentlyContinue
     }

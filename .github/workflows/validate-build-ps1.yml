@@ -141,3 +141,8 @@ jobs:
             Write-Error "build.ps1 output still contains 'The system cannot find the path specified.'"
             exit 1
           }
+
+          if (Select-String -Path $combinedLog -SimpleMatch "Nuitka-Postprocessing:WARNING:") {
+            Write-Error "build.ps1 output still contains Nuitka postprocessing warnings."
+            exit 1
+          }
