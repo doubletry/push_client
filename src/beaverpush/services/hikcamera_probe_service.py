@@ -34,8 +34,6 @@ class HikCameraProbeWorker(QThread):
         self._stop_requested.set()
 
     def run(self) -> None:
-        if self._stop_requested.is_set():
-            return
         try:
             width, height = probe_hikcamera_size(
                 self._serial_number,
