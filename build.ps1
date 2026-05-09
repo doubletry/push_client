@@ -117,7 +117,8 @@ if ([string]::IsNullOrWhiteSpace($Version)) {
 $WindowsVersion = Convert-ToWindowsVersion -RawVersion $Version
 $GeneratedVersionFile = (New-TemporaryFile).FullName
 Set-Content -Path $GeneratedVersionFile -Value $Version -Encoding utf8
-$NuitkaStagingRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("beaverpush-nuitka-" + [guid]::NewGuid().ToString("N"))
+$StagingStamp = Get-Date -Format "yyyyMMdd-HHmmss"
+$NuitkaStagingRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("beaverpush-nuitka-$StagingStamp-" + [guid]::NewGuid().ToString("N"))
 
 try {
     # ── 基本 参数 ──
@@ -246,7 +247,12 @@ try {
 }
 finally {
     if (Test-Path $NuitkaStagingRoot) {
-        Remove-Item $NuitkaStagingRoot -Recurse -Force -ErrorAction SilentlyContinue
+        try {
+            Remove-Item $NuitkaStagingRoot -Recurse -Force
+        }
+        catch {
+            Write-Warning "未能清理 Nuitka 暂存目录: $NuitkaStagingRoot"
+        }
     }
     if (Test-Path $GeneratedVersionFile) {
         Remove-Item $GeneratedVersionFile -Force -ErrorAction SilentlyContinue
